@@ -1,5 +1,7 @@
 #pragma once
 
+#include "Resources.hpp"
+
 namespace nether::utils
 {
 	std::wstring StringToWString(const std::string_view inputString);
@@ -12,4 +14,6 @@ namespace nether::utils
 	void ThrowIfFailed(const HRESULT hr);
 
 	void SetName(ID3D12Object* const object, const std::wstring_view name);
+
+	std::vector<D3D12_INPUT_ELEMENT_DESC> ConstructInputElementDesc(const std::span<InputElementDesc> inputElementDesc);
 }

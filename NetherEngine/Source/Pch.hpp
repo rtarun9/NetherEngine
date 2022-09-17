@@ -9,6 +9,7 @@ constexpr bool NETHER_DEBUG_BUILD = false;
 
 // STL includes.
 #include <cstdint>
+#include <filesystem>
 #include <algorithm>
 #include <string_view>
 #include <memory>
@@ -34,3 +35,7 @@ constexpr bool NETHER_DEBUG_BUILD = false;
 #include <wrl.h>
 #include <DirectXMath.h>
 #include <d3dx12.h>
+#include <d3d12shader.h>
+
+// DXC API includes.
+#include <dxcapi.h>

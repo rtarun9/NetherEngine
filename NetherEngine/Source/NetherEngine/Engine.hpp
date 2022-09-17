@@ -2,6 +2,12 @@
 
 #include "DataTypes.hpp"
 
+// Forward declarations.
+namespace D3D12MA
+{
+	struct Allocator;
+}
+
 namespace nether
 {
 	class Engine
@@ -28,6 +34,12 @@ namespace nether
 		void Flush();
 
 	private:
+		void FindAssetsDirectory();
+		std::wstring GetAssetPath(const std::wstring_view assetPath) const;
+
+		void LoadCoreObjects(const HWND windowHandle, const Uint2& clientDimensions);
+		void LoadContentAndAssets();
+
 		void CreateRenderTargetViews();
 
 	private:
@@ -40,9 +52,12 @@ namespace nether
 		bool mTearingSupported{false};
 
 		Uint2 mClientDimensions{};
+		float mAspectRatio{0.0f};
+
+		std::wstring mAssetsDirectoryPath{};
 
 		// DirectX12 and DXGI objects.
-		Microsoft::WRL::ComPtr<ID3D12Debug4> mDebugController{};
+		Microsoft::WRL::ComPtr<ID3D12Debug5> mDebugController{};
 		Microsoft::WRL::ComPtr<IDXGIFactory6> mFactory{};
 		Microsoft::WRL::ComPtr<IDXGIAdapter3> mAdapter{};
 		Microsoft::WRL::ComPtr<ID3D12Device5> mDevice{};
@@ -63,5 +78,21 @@ namespace nether
 		HANDLE mFenceEvent{};
 		uint64_t mFenceValue{};
 		std::array<uint64_t, NUMBER_OF_FRAMES> mFrameFenceValues{};
+
+		// D3D12MA core allocator.
+		D3D12MA::Allocator *mAllocator{};
+
+		const CD3DX12_RECT mScissorRect{ 0, 0, LONG_MAX, LONG_MAX };
+		CD3DX12_VIEWPORT mViewport{};
+
+		// Render 'sandbox' data.
+		Microsoft::WRL::ComPtr<ID3D12RootSignature> mHelloTriangleRootSignature{};
+		Microsoft::WRL::ComPtr<ID3D12PipelineState> mHelloTrianglePipelineState{};
+
+		Microsoft::WRL::ComPtr<ID3D12Resource> mVertexBuffer{};
+		D3D12_VERTEX_BUFFER_VIEW mVertexBufferView{};
+
+		Microsoft::WRL::ComPtr<ID3D12Resource> mConstantBuffer{};
+		UINT8* mConstantBufferPointer{};
 	};
 }

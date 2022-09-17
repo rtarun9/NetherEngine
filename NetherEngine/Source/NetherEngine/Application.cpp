@@ -139,7 +139,7 @@ namespace nether
             return 0;
         }break;
 
-        case WM_EXITSIZEMOVE:
+        case WM_SIZE:
         {
             if (engine)
             {

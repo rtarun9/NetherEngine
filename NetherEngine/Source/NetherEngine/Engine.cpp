@@ -4,6 +4,15 @@
 
 #include "DataTypes.hpp"
 #include "Utils.hpp"
+#include "Shader.hpp"
+
+#include <D3D12MemAlloc.h>
+
+struct alignas(256) MVPBuffer
+{
+	DirectX::XMMATRIX modelMatrix{};
+	DirectX::XMMATRIX viewProjectionMatrix{};
+};
 
 namespace nether
 {
@@ -14,142 +23,39 @@ namespace nether
 	
 	void Engine::Init(const HWND windowHandle, const Uint2& clientDimensions)
 	{
-		mClientDimensions = clientDimensions;
+		FindAssetsDirectory();
 
-		// Enable the debug layer if in debug build configuration, and set the factory create flag to DXGI_CREATE_FACTORY_DEBUG.
-		UINT dxgiFactoryCreateFlags = 0;
+		LoadCoreObjects(windowHandle, clientDimensions);
+		LoadContentAndAssets();
 
-		if constexpr (NETHER_DEBUG_BUILD)
-		{
-			utils::ThrowIfFailed(::D3D12GetInterface(CLSID_D3D12Debug, IID_PPV_ARGS(&mDebugController)));
-			mDebugController->EnableDebugLayer();
-			mDebugController->SetEnableGPUBasedValidation(TRUE);
-			mDebugController->SetEnableSynchronizedCommandQueueValidation(TRUE);
-
-			dxgiFactoryCreateFlags |= DXGI_CREATE_FACTORY_DEBUG;
-		}
-
-		// Create DXGI factory so adapters can be queried.
-		utils::ThrowIfFailed(::CreateDXGIFactory2(dxgiFactoryCreateFlags, IID_PPV_ARGS(&mFactory)));
-
-		// Get the GPU adapter with best performance.
-		utils::ThrowIfFailed(mFactory->EnumAdapterByGpuPreference(0u, DXGI_GPU_PREFERENCE_HIGH_PERFORMANCE, IID_PPV_ARGS(&mAdapter)));
-
-		// Log the adapter name if in debug mode.
-		if constexpr (NETHER_DEBUG_BUILD)
-		{
-			DXGI_ADAPTER_DESC adapterDesc{};
-			utils::ThrowIfFailed(mAdapter->GetDesc(&adapterDesc));
-			::OutputDebugStringW(adapterDesc.Description);
-		}
-
-		// Create D3D12 device.
-		utils::ThrowIfFailed(::D3D12CreateDevice(mAdapter.Get(), D3D_FEATURE_LEVEL_12_0, IID_PPV_ARGS(&mDevice)));
-		utils::SetName(mDevice.Get(), L"D3D12 Device");
-
-		// Set break points on error messages / warning messages / corruption messages in debug builds.
-		if constexpr (NETHER_DEBUG_BUILD)
-		{
-			Microsoft::WRL::ComPtr<ID3D12InfoQueue> infoQueue{};
-			utils::ThrowIfFailed(mDevice.As(&infoQueue));
-
-			infoQueue->SetBreakOnSeverity(D3D12_MESSAGE_SEVERITY_ERROR, TRUE);
-			infoQueue->SetBreakOnSeverity(D3D12_MESSAGE_SEVERITY_CORRUPTION, TRUE);
-			infoQueue->SetBreakOnSeverity(D3D12_MESSAGE_SEVERITY_WARNING, TRUE);
-		}
-
-		// Create direct command queue.
-		const D3D12_COMMAND_QUEUE_DESC directCommandQueueDesc
-		{
-			.Type = D3D12_COMMAND_LIST_TYPE_DIRECT,
-			.Priority = D3D12_COMMAND_QUEUE_PRIORITY_NORMAL,
-			.Flags = D3D12_COMMAND_QUEUE_FLAG_NONE,
-			.NodeMask = 0u,
-		};
-
-		utils::ThrowIfFailed(mDevice->CreateCommandQueue(&directCommandQueueDesc, IID_PPV_ARGS(&mDirectCommandQueue)));
-		utils::SetName(mDirectCommandQueue.Get(), L"Direct Command Queue");
-
-		// Check for tearing support (must be supported by both the monitor and the adapter).
-		BOOL tearingSupported{FALSE};
-		if (SUCCEEDED(mFactory->CheckFeatureSupport(DXGI_FEATURE_PRESENT_ALLOW_TEARING, &tearingSupported, sizeof(tearingSupported))))
-		{
-			mTearingSupported = true;
-		}
-
-		// Create the swapchain.
-		DXGI_SWAP_CHAIN_DESC1 swapChainDesc
-		{
-			.Width = mClientDimensions.x,
-			.Height = mClientDimensions.y,
-			.Format = SWAP_CHAIN_BACK_BUFFER_FORMAT,
-			.Stereo = FALSE,
-			.SampleDesc = {1u, 0u},
-			.BufferUsage = DXGI_USAGE_RENDER_TARGET_OUTPUT,
-			.BufferCount = NUMBER_OF_FRAMES,
-			.Scaling = DXGI_SCALING_STRETCH,
-			.SwapEffect = DXGI_SWAP_EFFECT_FLIP_DISCARD,
-			.AlphaMode = DXGI_ALPHA_MODE_UNSPECIFIED,
-			.Flags = mTearingSupported ? DXGI_SWAP_CHAIN_FLAG_ALLOW_TEARING : 0u
-		};
-
-		Microsoft::WRL::ComPtr<IDXGISwapChain1> swapChain{};
-		utils::ThrowIfFailed(mFactory->CreateSwapChainForHwnd(mDirectCommandQueue.Get(), windowHandle, &swapChainDesc, nullptr, nullptr, &swapChain));
-		utils::ThrowIfFailed(mFactory->MakeWindowAssociation(windowHandle, DXGI_MWA_NO_ALT_ENTER));
-		utils::ThrowIfFailed(swapChain.As(&mSwapChain));
-
-		mCurrentSwapChainBackBufferIndex = mSwapChain->GetCurrentBackBufferIndex();
-		
-		// Create descriptor heaps.
-		D3D12_DESCRIPTOR_HEAP_DESC rtvDescriptorHeapDesc
-		{
-			.Type = D3D12_DESCRIPTOR_HEAP_TYPE_RTV,
-			.NumDescriptors = 10u,
-			.Flags = D3D12_DESCRIPTOR_HEAP_FLAG_NONE,
-			.NodeMask = 0u,
-		};
-
-		utils::ThrowIfFailed(mDevice->CreateDescriptorHeap(&rtvDescriptorHeapDesc, IID_PPV_ARGS(&mRtvDescriptorHeap)));
-		utils::SetName(mRtvDescriptorHeap.Get(), L"RTV Descriptor Heap");
-
-		mRtvDescriptorSize = mDevice->GetDescriptorHandleIncrementSize(D3D12_DESCRIPTOR_HEAP_TYPE_RTV);
-		
-		CreateRenderTargetViews();
-
-		// Create command allocators.
-		for (const uint32_t frameIndex : std::views::iota(0u, NUMBER_OF_FRAMES))
-		{
-			mDevice->CreateCommandAllocator(D3D12_COMMAND_LIST_TYPE_DIRECT, IID_PPV_ARGS(&mCommandAllocators[frameIndex]));
-			utils::SetName(mCommandAllocators[frameIndex].Get(), L"Command Allocator");
-		}
-
-
-		// Create command list.
-		mDevice->CreateCommandList(0u, D3D12_COMMAND_LIST_TYPE_DIRECT, mCommandAllocators[mCurrentSwapChainBackBufferIndex].Get(), nullptr, IID_PPV_ARGS(&mCommandList));
-		utils::ThrowIfFailed(mCommandList->Close());
-
-		// Create synchronization primitives.
-		utils::ThrowIfFailed(mDevice->CreateFence(0u, D3D12_FENCE_FLAG_NONE, IID_PPV_ARGS(&mFence)));
-		utils::SetName(mFence.Get(), L"Direct Command Queue Fence"); 
-
-		mFenceEvent = ::CreateEvent(nullptr, FALSE, FALSE, nullptr);
-		if (!mFenceEvent)
-		{
-			utils::ErrorMessage(L"Failed to create fence event.");
-		}
+		Flush();
 
 		mIsInitialized = true;
 	}
 
 	void Engine::Update(float deltaTime)
 	{
+		const DirectX::XMVECTOR eyePosition = DirectX::XMVectorSet(0.0f, 0.0f, -3.0f, 1.0f);
+		const DirectX::XMVECTOR focusPosition = DirectX::XMVectorSet(0.0f, 0.0f, 0.0f, 1.0f);
+		const DirectX::XMVECTOR upDirection = DirectX::XMVectorSet(0.0f, 1.0f, 0.0f, 0.0f);
+
+		static float rotation = 0.0f;
+		rotation += 1.0f * deltaTime;
+
+		const MVPBuffer buffer
+		{
+			.modelMatrix = DirectX::XMMatrixRotationZ(rotation),
+			.viewProjectionMatrix = DirectX::XMMatrixLookAtLH(eyePosition, focusPosition, upDirection) * DirectX::XMMatrixPerspectiveFovLH(DirectX::XMConvertToRadians(45.0f), mClientDimensions.x / (float)mClientDimensions.y, 0.1f, 1000.0f)
+		};
+
+		std::memcpy(mConstantBufferPointer, &buffer, sizeof(MVPBuffer));
 	}
 
 	void Engine::Render()
 	{
 		StartFrame();
 
-		CD3DX12_RESOURCE_BARRIER backBufferPresentToRenderTarget = CD3DX12_RESOURCE_BARRIER::Transition(mSwapChainBackBuffers[mCurrentSwapChainBackBufferIndex].Get(), D3D12_RESOURCE_STATE_PRESENT, D3D12_RESOURCE_STATE_RENDER_TARGET);
+		const CD3DX12_RESOURCE_BARRIER backBufferPresentToRenderTarget = CD3DX12_RESOURCE_BARRIER::Transition(mSwapChainBackBuffers[mCurrentSwapChainBackBufferIndex].Get(), D3D12_RESOURCE_STATE_PRESENT, D3D12_RESOURCE_STATE_RENDER_TARGET);
 		mCommandList->ResourceBarrier(1u, &backBufferPresentToRenderTarget);
 
 		static constexpr std::array<float, 4> clearColor{ 0.2f, 0.2f, 0.2f, 1.0f };
@@ -157,12 +63,24 @@ namespace nether
 
 		mCommandList->OMSetRenderTargets(1u, &rtvHandle, FALSE, nullptr);
 		mCommandList->ClearRenderTargetView(rtvHandle, clearColor.data(), 0u, nullptr);
+		mCommandList->RSSetScissorRects(1u, &mScissorRect);
+		mCommandList->RSSetViewports(1u, &mViewport);
 
-		CD3DX12_RESOURCE_BARRIER backBufferRenderTargetToPresent = CD3DX12_RESOURCE_BARRIER::Transition(mSwapChainBackBuffers[mCurrentSwapChainBackBufferIndex].Get(), D3D12_RESOURCE_STATE_RENDER_TARGET, D3D12_RESOURCE_STATE_PRESENT);
+		mCommandList->SetPipelineState(mHelloTrianglePipelineState.Get());
+		mCommandList->SetGraphicsRootSignature(mHelloTriangleRootSignature.Get());
+
+		mCommandList->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
+		mCommandList->IASetVertexBuffers(0u, 1u, &mVertexBufferView);
+
+		mCommandList->SetGraphicsRootConstantBufferView(0u, mConstantBuffer->GetGPUVirtualAddress());
+
+		mCommandList->DrawInstanced(3u, 1u, 0u, 0u);
+
+		const CD3DX12_RESOURCE_BARRIER backBufferRenderTargetToPresent = CD3DX12_RESOURCE_BARRIER::Transition(mSwapChainBackBuffers[mCurrentSwapChainBackBufferIndex].Get(), D3D12_RESOURCE_STATE_RENDER_TARGET, D3D12_RESOURCE_STATE_PRESENT);
 		mCommandList->ResourceBarrier(1u, &backBufferRenderTargetToPresent);
 
 		utils::ThrowIfFailed(mCommandList->Close());
-		std::array<ID3D12CommandList* const, 1> commandLists
+		const std::array<ID3D12CommandList* const, 1> commandLists
 		{
 			mCommandList.Get()
 		};
@@ -176,20 +94,22 @@ namespace nether
 	void Engine::Destroy()
 	{
 		Flush();
+
+		mAllocator->Release();
 	}
 
 	void Engine::Resize(const Uint2& clientDimensions)
 	{
 		if (clientDimensions != mClientDimensions)
 		{
+			// Flush the queue to execute all pending operations, reset swapchain back buffers, resize the buffer's, and create the RTV's again.
+			Flush();
+
 			mClientDimensions = clientDimensions;
 
 			// Don't allow swapchain back buffers to have width / height as 0u.
 			mClientDimensions.x = std::max<uint32_t>(mClientDimensions.x, 1u);
 			mClientDimensions.y = std::max<uint32_t>(mClientDimensions.y, 1u);
-
-			// Flush the queue to execute all pending operations, reset swapchain back buffers, resize the buffer's, and create the RTV's again.
-			Flush();
 
 			for (const uint32_t bufferIndex : std::views::iota(0u, NUMBER_OF_FRAMES))
 			{
@@ -197,9 +117,9 @@ namespace nether
 				mFrameFenceValues[bufferIndex] = mFrameFenceValues[mCurrentSwapChainBackBufferIndex];
 			}
 
-			DXGI_SWAP_CHAIN_DESC1 swapChainDesc{};
-			utils::ThrowIfFailed(mSwapChain->GetDesc1(&swapChainDesc));
-			utils::ThrowIfFailed(mSwapChain->ResizeBuffers(NUMBER_OF_FRAMES, mClientDimensions.x, mClientDimensions.y, swapChainDesc.Format, swapChainDesc.Flags));
+			DXGI_SWAP_CHAIN_DESC swapChainDesc{};
+			utils::ThrowIfFailed(mSwapChain->GetDesc(&swapChainDesc));
+			utils::ThrowIfFailed(mSwapChain->ResizeBuffers(NUMBER_OF_FRAMES, mClientDimensions.x, mClientDimensions.y, swapChainDesc.BufferDesc.Format, swapChainDesc.Flags));
 
 			mCurrentSwapChainBackBufferIndex = mSwapChain->GetCurrentBackBufferIndex();
 
@@ -255,7 +175,7 @@ namespace nether
 		if (mFence->GetCompletedValue() < fenceValue)
 		{
 			utils::ThrowIfFailed(mFence->SetEventOnCompletion(fenceValue, mFenceEvent));
-			::WaitForSingleObject(mFenceEvent, DWORD_MAX);
+			::WaitForSingleObjectEx(mFenceEvent, INFINITE, FALSE);
 		}
 	}
 
@@ -264,6 +184,292 @@ namespace nether
 		const uint64_t fenceValue = Signal();
 		WaitForFenceValue(fenceValue);
 		mFrameFenceValues[mCurrentSwapChainBackBufferIndex] = fenceValue;
+	}
+
+	void Engine::FindAssetsDirectory()
+	{
+		std::filesystem::path currentDirectory = std::filesystem::current_path();
+
+		while (!std::filesystem::exists(currentDirectory / "Assets"))
+		{
+			if (currentDirectory.has_parent_path())
+			{
+				currentDirectory = currentDirectory.parent_path();
+			}
+			else
+			{
+				utils::ErrorMessage(L"Assets Directory not found!");
+			}
+		}
+
+		const std::filesystem::path assetsDirectory = currentDirectory / "Assets";
+
+		if (!std::filesystem::is_directory(assetsDirectory))
+		{
+			utils::ErrorMessage(L"Assets Directory that was located is not a directory!");
+		}
+
+		mAssetsDirectoryPath = currentDirectory.wstring() + L"/Assets/";
+	}
+
+	std::wstring Engine::GetAssetPath(const std::wstring_view assetPath) const
+	{
+		return std::move(mAssetsDirectoryPath + assetPath.data());
+	}
+
+	void Engine::LoadCoreObjects(const HWND windowHandle, const Uint2& clientDimensions)
+	{
+		mClientDimensions = clientDimensions;
+
+		// Enable the debug layer if in debug build configuration, and set the factory create flag to DXGI_CREATE_FACTORY_DEBUG.
+		UINT dxgiFactoryCreateFlags = 0;
+
+		if constexpr (NETHER_DEBUG_BUILD)
+		{
+			utils::ThrowIfFailed(::D3D12GetInterface(CLSID_D3D12Debug, IID_PPV_ARGS(&mDebugController)));
+			mDebugController->EnableDebugLayer();
+			mDebugController->SetEnableGPUBasedValidation(TRUE);
+			mDebugController->SetEnableSynchronizedCommandQueueValidation(TRUE);
+			mDebugController->SetEnableAutoName(TRUE);
+
+			dxgiFactoryCreateFlags |= DXGI_CREATE_FACTORY_DEBUG;
+		}
+
+		// Create DXGI factory so adapters can be queried, and DXGI objects can be generated.
+		utils::ThrowIfFailed(::CreateDXGIFactory2(dxgiFactoryCreateFlags, IID_PPV_ARGS(&mFactory)));
+
+		// Get the adapter with best performance (adapter represents a display system (GPU's, Video Memory, etc).
+		utils::ThrowIfFailed(mFactory->EnumAdapterByGpuPreference(0u, DXGI_GPU_PREFERENCE_HIGH_PERFORMANCE, IID_PPV_ARGS(&mAdapter)));
+
+		// Log the adapter name if in debug mode.
+		if constexpr (NETHER_DEBUG_BUILD)
+		{
+			DXGI_ADAPTER_DESC adapterDesc{};
+			utils::ThrowIfFailed(mAdapter->GetDesc(&adapterDesc));
+			::OutputDebugStringW(adapterDesc.Description);
+		}
+
+		// Create D3D12 device (a virtual adapter, for creating most D3D12 objects).
+		utils::ThrowIfFailed(::D3D12CreateDevice(mAdapter.Get(), D3D_FEATURE_LEVEL_12_0, IID_PPV_ARGS(&mDevice)));
+		utils::SetName(mDevice.Get(), L"D3D12 Device");
+
+		// Set break points on error messages / warning messages / corruption messages in debug builds.
+		if constexpr (NETHER_DEBUG_BUILD)
+		{
+			Microsoft::WRL::ComPtr<ID3D12InfoQueue> infoQueue{};
+			utils::ThrowIfFailed(mDevice.As(&infoQueue));
+
+			infoQueue->SetBreakOnSeverity(D3D12_MESSAGE_SEVERITY_ERROR, TRUE);
+			infoQueue->SetBreakOnSeverity(D3D12_MESSAGE_SEVERITY_CORRUPTION, TRUE);
+			infoQueue->SetBreakOnSeverity(D3D12_MESSAGE_SEVERITY_WARNING, TRUE);
+		}
+
+		// Create D3D12MA allocation object.
+		D3D12MA::ALLOCATOR_DESC allocatorDesc
+		{
+			.pDevice = mDevice.Get(),
+			.pAdapter = mAdapter.Get()
+		};
+
+		utils::ThrowIfFailed(D3D12MA::CreateAllocator(&allocatorDesc, &mAllocator));
+
+		// Create direct command queue (execution port of GPU -> has methods for submitting command list and their execution).
+		const D3D12_COMMAND_QUEUE_DESC directCommandQueueDesc
+		{
+			.Type = D3D12_COMMAND_LIST_TYPE_DIRECT,
+			.Priority = D3D12_COMMAND_QUEUE_PRIORITY_NORMAL,
+			.Flags = D3D12_COMMAND_QUEUE_FLAG_NONE,
+			.NodeMask = 0u,
+		};
+
+		utils::ThrowIfFailed(mDevice->CreateCommandQueue(&directCommandQueueDesc, IID_PPV_ARGS(&mDirectCommandQueue)));
+		utils::SetName(mDirectCommandQueue.Get(), L"Direct Command Queue");
+
+		// Check for tearing support (must be supported by both the monitor and the adapter).
+		BOOL tearingSupported{ FALSE };
+		if (SUCCEEDED(mFactory->CheckFeatureSupport(DXGI_FEATURE_PRESENT_ALLOW_TEARING, &tearingSupported, sizeof(tearingSupported))))
+		{
+			mTearingSupported = true;
+		}
+
+		// Create the swapchain (implements surfaces for rendering data before presenting it to a output).
+		const DXGI_SWAP_CHAIN_DESC1 swapChainDesc
+		{
+			.Width = mClientDimensions.x,
+			.Height = mClientDimensions.y,
+			.Format = SWAP_CHAIN_BACK_BUFFER_FORMAT,
+			.Stereo = FALSE,
+			.SampleDesc = {1u, 0u},
+			.BufferUsage = DXGI_USAGE_RENDER_TARGET_OUTPUT,
+			.BufferCount = NUMBER_OF_FRAMES,
+			.Scaling = DXGI_SCALING_STRETCH,
+			.SwapEffect = DXGI_SWAP_EFFECT_FLIP_DISCARD,
+			.AlphaMode = DXGI_ALPHA_MODE_UNSPECIFIED,
+			.Flags = mTearingSupported ? DXGI_SWAP_CHAIN_FLAG_ALLOW_TEARING : 0u
+		};
+
+		Microsoft::WRL::ComPtr<IDXGISwapChain1> swapChain{};
+		utils::ThrowIfFailed(mFactory->CreateSwapChainForHwnd(mDirectCommandQueue.Get(), windowHandle, &swapChainDesc, nullptr, nullptr, &swapChain));
+		utils::ThrowIfFailed(mFactory->MakeWindowAssociation(windowHandle, DXGI_MWA_NO_ALT_ENTER));
+		utils::ThrowIfFailed(swapChain.As(&mSwapChain));
+
+		mCurrentSwapChainBackBufferIndex = mSwapChain->GetCurrentBackBufferIndex();
+
+		// Create descriptor heaps (contiguous allocation of resource descriptors).
+		const D3D12_DESCRIPTOR_HEAP_DESC rtvDescriptorHeapDesc
+		{
+			.Type = D3D12_DESCRIPTOR_HEAP_TYPE_RTV,
+			.NumDescriptors = 10u,
+			.Flags = D3D12_DESCRIPTOR_HEAP_FLAG_NONE,
+			.NodeMask = 0u,
+		};
+
+		utils::ThrowIfFailed(mDevice->CreateDescriptorHeap(&rtvDescriptorHeapDesc, IID_PPV_ARGS(&mRtvDescriptorHeap)));
+		utils::SetName(mRtvDescriptorHeap.Get(), L"RTV Descriptor Heap");
+
+		mRtvDescriptorSize = mDevice->GetDescriptorHandleIncrementSize(D3D12_DESCRIPTOR_HEAP_TYPE_RTV);
+
+		CreateRenderTargetViews();
+
+		// Create command allocators.
+		for (const uint32_t frameIndex : std::views::iota(0u, NUMBER_OF_FRAMES))
+		{
+			mDevice->CreateCommandAllocator(D3D12_COMMAND_LIST_TYPE_DIRECT, IID_PPV_ARGS(&mCommandAllocators[frameIndex]));
+			utils::SetName(mCommandAllocators[frameIndex].Get(), L"Command Allocator");
+		}
+
+		// Create command list.
+		mDevice->CreateCommandList(0u, D3D12_COMMAND_LIST_TYPE_DIRECT, mCommandAllocators[mCurrentSwapChainBackBufferIndex].Get(), nullptr, IID_PPV_ARGS(&mCommandList));
+		utils::SetName(mCommandList.Get(), L"Command List");
+		utils::ThrowIfFailed(mCommandList->Close());
+
+		// Create synchronization primitives.
+		utils::ThrowIfFailed(mDevice->CreateFence(0u, D3D12_FENCE_FLAG_NONE, IID_PPV_ARGS(&mFence)));
+		utils::SetName(mFence.Get(), L"Direct Command Queue Fence");
+
+		mFenceEvent = ::CreateEvent(nullptr, FALSE, FALSE, nullptr);
+		if (!mFenceEvent)
+		{
+			utils::ErrorMessage(L"Failed to create fence event.");
+		}
+	}
+
+	void Engine::LoadContentAndAssets()
+	{
+		Shader vertexShader = ShaderCompiler::GetInstance().CompilerShader(ShaderType::Vertex, GetAssetPath(L"Shaders/HelloTriangleShader.hlsl"));
+		Shader pixelShader =  ShaderCompiler::GetInstance().CompilerShader(ShaderType::Pixel, GetAssetPath(L"Shaders/HelloTriangleShader.hlsl"));
+
+		// Create root signature.
+		// Get the highest supported root signature version.
+		D3D12_FEATURE_DATA_ROOT_SIGNATURE featureData
+		{
+			.HighestVersion = D3D_ROOT_SIGNATURE_VERSION_1_0,
+		};
+
+		if (SUCCEEDED(mDevice->CheckFeatureSupport(D3D12_FEATURE_ROOT_SIGNATURE, &featureData, sizeof(featureData))))
+		{
+			featureData.HighestVersion = D3D_ROOT_SIGNATURE_VERSION_1_1;
+		}
+
+		const D3D12_VERSIONED_ROOT_SIGNATURE_DESC  rootSignatureDesc
+		{
+			.Version = featureData.HighestVersion,
+			.Desc_1_1
+			{
+				.NumParameters = static_cast<uint32_t>(vertexShader.shaderReflection.rootParameters.size()),
+				.pParameters = vertexShader.shaderReflection.rootParameters.data(),
+				.Flags = D3D12_ROOT_SIGNATURE_FLAG_ALLOW_INPUT_ASSEMBLER_INPUT_LAYOUT,
+			}
+		};
+
+		Microsoft::WRL::ComPtr<ID3DBlob> rootSignatureBlob{};
+		Microsoft::WRL::ComPtr<ID3DBlob> errorBlob{};
+		utils::ThrowIfFailed(::D3D12SerializeVersionedRootSignature(&rootSignatureDesc, &rootSignatureBlob, &errorBlob));
+		utils::ThrowIfFailed(mDevice->CreateRootSignature(0u, rootSignatureBlob->GetBufferPointer(), rootSignatureBlob->GetBufferSize(), IID_PPV_ARGS(&mHelloTriangleRootSignature)));
+
+		const std::vector<D3D12_INPUT_ELEMENT_DESC> inputElementDesc = utils::ConstructInputElementDesc(vertexShader.shaderReflection.inputElementDescs);
+		// temp : vertexShader.shaderReflection.rootParameters.insert(vertexShader.shaderReflection.rootParameters.end(), pixelShader.shaderReflection.rootParameters.begin(), pixelShader.shaderReflection.rootParameters.end());
+
+
+		// Create graphics pipeline state.
+		const D3D12_DEPTH_STENCIL_DESC nullDepthStencilDesc
+		{
+			.DepthEnable = FALSE,
+			.StencilEnable = FALSE
+		};
+
+		const D3D12_GRAPHICS_PIPELINE_STATE_DESC pipelineStateDesc
+		{
+			.pRootSignature = mHelloTriangleRootSignature.Get(),
+			.VS
+			{
+				.pShaderBytecode = vertexShader.shaderBlob->GetBufferPointer(),
+				.BytecodeLength = vertexShader.shaderBlob->GetBufferSize()
+            },
+			.PS
+			{
+				.pShaderBytecode = pixelShader.shaderBlob->GetBufferPointer(),
+				.BytecodeLength = pixelShader.shaderBlob->GetBufferSize()
+            },
+			.BlendState = CD3DX12_BLEND_DESC(D3D12_DEFAULT),
+			.SampleMask = UINT_MAX,
+			.RasterizerState = CD3DX12_RASTERIZER_DESC(D3D12_DEFAULT),
+			.DepthStencilState = nullDepthStencilDesc,
+			.InputLayout
+			{
+				.pInputElementDescs = inputElementDesc.data(),
+				.NumElements = static_cast<uint32_t>(inputElementDesc.size()),
+            },
+			.PrimitiveTopologyType = D3D12_PRIMITIVE_TOPOLOGY_TYPE_TRIANGLE,
+			.NumRenderTargets = 1u,
+			.RTVFormats = {SWAP_CHAIN_BACK_BUFFER_FORMAT},
+			.SampleDesc = {1u, 0u},
+			.Flags = D3D12_PIPELINE_STATE_FLAG_NONE
+		};
+
+		utils::ThrowIfFailed(mDevice->CreateGraphicsPipelineState(&pipelineStateDesc, IID_PPV_ARGS(&mHelloTrianglePipelineState)));
+	
+		// Load vertex buffer.
+		struct Vertex
+		{
+			DirectX::XMFLOAT3 position{};
+			DirectX::XMFLOAT3 color{};
+		};
+
+		std::array<Vertex, 3> vertices
+		{
+			Vertex{.position = {-0.5f, -0.5f, 0.0f}, .color = {1.0f, 0.0f, 0.0f}},
+			Vertex{.position = { 0.0f,  0.5f, 0.0f}, .color = {0.0f, 1.0f, 0.0f}},
+			Vertex{.position = { 0.5f, -0.5f, 0.0f}, .color = {0.0f, 0.0f, 1.0f}},
+		};
+
+		const UINT vertexBufferSize = sizeof(vertices);
+
+		CD3DX12_HEAP_PROPERTIES uploadHeapProperties(D3D12_HEAP_TYPE_UPLOAD);
+		CD3DX12_RESOURCE_DESC vertexBufferResourceDesc = CD3DX12_RESOURCE_DESC::Buffer(vertexBufferSize);
+
+		utils::ThrowIfFailed(mDevice->CreateCommittedResource(&uploadHeapProperties, D3D12_HEAP_FLAG_NONE, &vertexBufferResourceDesc, D3D12_RESOURCE_STATE_GENERIC_READ, nullptr, IID_PPV_ARGS(&mVertexBuffer)));
+		UINT8* vertexBufferPointer{};
+		CD3DX12_RANGE readOnlyRange{ 0, 0 };
+		utils::ThrowIfFailed(mVertexBuffer->Map(0u, &readOnlyRange, (void**)(&vertexBufferPointer)));
+		std::memcpy(vertexBufferPointer, vertices.data(), vertexBufferSize);
+		mVertexBuffer->Unmap(0u, &readOnlyRange);
+
+		// Create vertex buffer view.
+		mVertexBufferView =
+		{
+			.BufferLocation = mVertexBuffer->GetGPUVirtualAddress(),
+			.SizeInBytes = vertexBufferSize,
+			.StrideInBytes = sizeof(Vertex)
+		};
+
+		// Create constant buffer.
+		CD3DX12_RESOURCE_DESC constantBufferDesc = CD3DX12_RESOURCE_DESC::Buffer(sizeof(MVPBuffer));
+		utils::ThrowIfFailed(mDevice->CreateCommittedResource(&uploadHeapProperties, D3D12_HEAP_FLAG_NONE, &constantBufferDesc, D3D12_RESOURCE_STATE_GENERIC_READ, nullptr, IID_PPV_ARGS(&mConstantBuffer)));
+		utils::ThrowIfFailed(mConstantBuffer->Map(0u, &readOnlyRange, (void**)(&mConstantBufferPointer)));
+
+		// Make viewport.
+		mViewport = CD3DX12_VIEWPORT(0.0f, 0.0f, (float)mClientDimensions.x, (float)mClientDimensions.y);
 	}
 
 	void Engine::CreateRenderTargetViews()
@@ -279,5 +485,8 @@ namespace nether
 			// Offset descriptor handle.
 			rtvCpuDescriptorHandle.ptr += mRtvDescriptorSize;
 		}
+
+		mViewport = CD3DX12_VIEWPORT(0.0f, 0.0f, (float)mClientDimensions.x, (float)mClientDimensions.y);
+		mAspectRatio = (float)mClientDimensions.x / mClientDimensions.y;
 	}
 }
