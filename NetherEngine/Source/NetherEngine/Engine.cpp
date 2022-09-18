@@ -66,12 +66,16 @@ namespace nether
 		mCommandList->SetGraphicsRootSignature(mHelloTriangleRootSignature.Get());
 
 		mCommandList->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
-		mCommandList->IASetVertexBuffers(0u, 1u, &mVertexBuffer->vertexBufferView);
-		mCommandList->IASetIndexBuffer(&mIndexBuffer->indexBufferView);
 
-		mCommandList->SetGraphicsRootConstantBufferView(0u, mConstantBuffer->resource->GetGPUVirtualAddress());
+		for (size_t i : std::views::iota(0u, mCube->mIndexBuffers.size()))
+		{
+			mCommandList->IASetVertexBuffers(0u, 1u, &mCube->mVertexBuffers[i]->vertexBufferView);
+			mCommandList->IASetIndexBuffer(&mCube->mIndexBuffers[i]->indexBufferView);
 
-		mCommandList->DrawIndexedInstanced(mIndexBuffer->indicesCount, 1u, 0u, 0u, 0u);
+			mCommandList->SetGraphicsRootConstantBufferView(0u, mConstantBuffer->resource->GetGPUVirtualAddress());
+			
+			mCommandList->DrawIndexedInstanced(mCube->mIndexBuffers[i]->indicesCount, 1u, 0u, 0u, 0u);
+		}
 
 		const CD3DX12_RESOURCE_BARRIER backBufferRenderTargetToPresent = CD3DX12_RESOURCE_BARRIER::Transition(mSwapChainBackBuffers[mCurrentSwapChainBackBufferIndex].Get(), D3D12_RESOURCE_STATE_RENDER_TARGET, D3D12_RESOURCE_STATE_PRESENT);
 		mCommandList->ResourceBarrier(1u, &backBufferRenderTargetToPresent);
@@ -170,7 +174,6 @@ namespace nether
 		};
 
 		mDirectCommandQueue->ExecuteCommandLists(1u, commandList.data());
-		Flush();
 	}
 
 	uint64_t Engine::Signal()
@@ -429,53 +432,9 @@ namespace nether
 		};
 
 		utils::ThrowIfFailed(mDevice->CreateGraphicsPipelineState(&pipelineStateDesc, IID_PPV_ARGS(&mHelloTrianglePipelineState)));
-	
-		// Create vertex buffer.
-		struct Vertex
-		{
-			DirectX::XMFLOAT3 position{};
-			DirectX::XMFLOAT3 color{};
-		};
-
-		std::array<Vertex, 8> vertices
-		{
-			  Vertex{ DirectX::XMFLOAT3(-1.0f, -1.0f, -1.0f), DirectX::XMFLOAT3(0.0f, 0.0f, 0.0f) }, // 0
-			  Vertex{ DirectX::XMFLOAT3(-1.0f,  1.0f, -1.0f), DirectX::XMFLOAT3(0.0f, 1.0f, 0.0f) }, // 1
-			  Vertex{ DirectX::XMFLOAT3(1.0f,  1.0f, -1.0f),  DirectX::XMFLOAT3(1.0f, 1.0f, 0.0f) }, // 2
-			  Vertex{ DirectX::XMFLOAT3(1.0f, -1.0f, -1.0f),  DirectX::XMFLOAT3(1.0f, 0.0f, 0.0f) }, // 3
-			  Vertex{ DirectX::XMFLOAT3(-1.0f, -1.0f,  1.0f), DirectX::XMFLOAT3(0.0f, 0.0f, 1.0f) }, // 4
-			  Vertex{ DirectX::XMFLOAT3(-1.0f,  1.0f,  1.0f), DirectX::XMFLOAT3(0.0f, 1.0f, 1.0f) }, // 5
-			  Vertex{ DirectX::XMFLOAT3(1.0f,  1.0f,  1.0f),  DirectX::XMFLOAT3(1.0f, 1.0f, 1.0f) }, // 6
-			  Vertex{ DirectX::XMFLOAT3(1.0f, -1.0f,  1.0f),  DirectX::XMFLOAT3(1.0f, 0.0f, 1.0f) }  // 7
-		};
-
-		VertexBufferCreationDesc vertexBufferCreationDesc
-		{
-			.numberOfElements = vertices.size(),
-			.stride = sizeof(Vertex)
-		};
-
-		mVertexBuffer = CreateVertexBuffer(vertexBufferCreationDesc, vertices.data(), L"Vertex Buffer");
-
-		// Create index buffer.
-		std::array<uint32_t, 36> indices
-		{
-			0u, 1u, 2u, 0u, 2u, 3u,
-			4u, 6u, 5u, 4u, 7u, 6u,
-			4u, 5u, 1u, 4u, 1u, 0u,
-			3u, 2u, 6u, 3u, 6u, 7u,
-			1u, 5u, 6u, 1u, 6u, 2u,
-			4u, 0u, 3u, 4u, 3u, 7u
-		};
-
-		IndexBufferCreationDesc indexBufferCreationDesc
-		{
-			.bufferSize = indices.size() * sizeof(uint32_t),
-			.indicesCount = indices.size(),
-			.format = DXGI_FORMAT_R32_UINT,
-		};
-
-		mIndexBuffer = CreateIndexBuffer(indexBufferCreationDesc, indices.data(), L"Index Buffer");
+		
+		// Create Model.
+		mCube = std::make_unique<Model>(GetAssetPath(L"Models/Box/glTF/Box.gltf"), this);
 
 		ConstantBufferCreationDesc constantBufferCreationDesc
 		{
@@ -574,6 +533,7 @@ namespace nether
 		utils::ThrowIfFailed(mCommandList->Reset(mCommandAllocators[mCurrentSwapChainBackBufferIndex].Get(), nullptr));
 		UpdateSubresources(mCommandList.Get(), destinationResource.Get(), intermediateResource.Get(), 0u, 0u, 1u, &subresourceData);
 		ExecuteCommandList();
+		Flush();
 
 		// Create vertex buffer view.
 		D3D12_VERTEX_BUFFER_VIEW vertexBufferView
@@ -598,7 +558,7 @@ namespace nether
 	{
 		if (!data)
 		{
-			utils::ErrorMessage(L"Cannot create vertex buffer with no data.");
+			utils::ErrorMessage(L"Cannot create index buffer with no data.");
 		}
 		
 		const size_t bufferSize = indexBufferCreationDesc.bufferSize;
@@ -630,6 +590,7 @@ namespace nether
 		utils::ThrowIfFailed(mCommandList->Reset(mCommandAllocators[mCurrentSwapChainBackBufferIndex].Get(), nullptr));
 		UpdateSubresources(mCommandList.Get(), destinationResource.Get(), intermediateResource.Get(), 0u, 0u, 1u, &subresourceData);
 		ExecuteCommandList();
+		Flush();
 
 		// Create index buffer view.
 		D3D12_INDEX_BUFFER_VIEW indexBufferView

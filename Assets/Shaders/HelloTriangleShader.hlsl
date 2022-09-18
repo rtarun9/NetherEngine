@@ -1,7 +1,8 @@
 struct VsInput
 {
     float3 position : POSITION;
-    float3 color : COLOR;
+    float2 textureCoords : TEXTURE_COORDS;
+    float3 normal : NORMAL;
 };
 
 struct VsOutput
@@ -22,7 +23,7 @@ VsOutput VsMain(VsInput input)
 {
     VsOutput output;
     output.position = mul(float4(input.position, 1.0f), mul(mvpBuffer.modelMatrix, mvpBuffer.viewProjectionMatrix));
-    output.color = input.color;
+    output.color = input.position;
 
     return output;
 }

@@ -5,6 +5,7 @@
 #include "DescriptorHeap.hpp"
 
 #include "Utils.hpp"
+#include "Model.hpp"
 
 struct alignas(256) MVPBuffer
 {
@@ -41,14 +42,14 @@ namespace nether
 		void WaitForFenceValue(const uint64_t fenceValue);
 		void Flush();
 
-	private:
+	public:
 		void FindAssetsDirectory();
 		std::wstring GetAssetPath(const std::wstring_view assetPath) const;
 
 		void LoadCoreObjects(const HWND windowHandle, const Uint2& clientDimensions);
 		void LoadContentAndAssets();
 
-	private:
+	public:
 		// Creation functions.
 		void CreateRenderTargetViews();
 		void CreateDepthStencilBuffer();
@@ -107,8 +108,7 @@ namespace nether
 		Microsoft::WRL::ComPtr<ID3D12RootSignature> mHelloTriangleRootSignature{};
 		Microsoft::WRL::ComPtr<ID3D12PipelineState> mHelloTrianglePipelineState{};
 
-		std::unique_ptr<VertexBuffer> mVertexBuffer{};
-		std::unique_ptr<IndexBuffer> mIndexBuffer{};
+		std::unique_ptr<Model> mCube{};
 		std::unique_ptr<ConstantBuffer> mConstantBuffer{};
 		MVPBuffer mMvpBuffer{};
 	};
