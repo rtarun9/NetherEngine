@@ -1,12 +1,16 @@
 #pragma once
 
 #include "DataTypes.hpp"
+#include "Resources.hpp"
+#include "DescriptorHeap.hpp"
 
-// Forward declarations.
-namespace D3D12MA
+#include "Utils.hpp"
+
+struct alignas(256) MVPBuffer
 {
-	struct Allocator;
-}
+	DirectX::XMMATRIX modelMatrix{};
+	DirectX::XMMATRIX viewProjectionMatrix{};
+};
 
 namespace nether
 {
@@ -24,10 +28,14 @@ namespace nether
 		void Resize(const Uint2& clientDimensions);
 		void OnKeyAction(const uint8_t keycode, const bool isKeyDown);
 
+	// Renderer related function's.
 	private:
 		void StartFrame();
 		void Present();
 		void EndFrame();
+
+		Microsoft::WRL::ComPtr<ID3D12GraphicsCommandList2> GetCommandList();
+		void ExecuteCommandList();
 
 		uint64_t Signal();
 		void WaitForFenceValue(const uint64_t fenceValue);
@@ -40,7 +48,14 @@ namespace nether
 		void LoadCoreObjects(const HWND windowHandle, const Uint2& clientDimensions);
 		void LoadContentAndAssets();
 
+	private:
+		// Creation functions.
 		void CreateRenderTargetViews();
+		void CreateDepthStencilBuffer();
+
+		std::unique_ptr<VertexBuffer> CreateVertexBuffer(const VertexBufferCreationDesc& vertexBufferCreationDesc, void* data, const std::wstring_view bufferName);
+		std::unique_ptr<IndexBuffer> CreateIndexBuffer(const IndexBufferCreationDesc& indexBufferCreationDesc, void* data, const std::wstring_view bufferName);
+		std::unique_ptr<ConstantBuffer> CreateConstantBuffer(const ConstantBufferCreationDesc& constantBufferCreationDesc, const std::wstring_view bufferName);
 
 	private:
 		static constexpr uint32_t NUMBER_OF_FRAMES = 3u;
@@ -68,8 +83,10 @@ namespace nether
 		std::array<Microsoft::WRL::ComPtr<ID3D12Resource>, NUMBER_OF_FRAMES> mSwapChainBackBuffers{};
 		uint32_t mCurrentSwapChainBackBufferIndex{};
 
-		Microsoft::WRL::ComPtr<ID3D12DescriptorHeap> mRtvDescriptorHeap{};
-		uint32_t mRtvDescriptorSize{};
+		std::unique_ptr<DescriptorHeap> mRtvDescriptorHeap{};
+		std::unique_ptr<DescriptorHeap> mDsvDescriptorHeap{};
+		std::unique_ptr<DescriptorHeap> mCbvSrvUavDescriptorHeap{};
+		std::unique_ptr<DescriptorHeap> mSamplerDescriptorHeap{};
 
 		std::array<Microsoft::WRL::ComPtr<ID3D12CommandAllocator>, NUMBER_OF_FRAMES> mCommandAllocators{};
 		Microsoft::WRL::ComPtr<ID3D12GraphicsCommandList2> mCommandList{};
@@ -79,20 +96,20 @@ namespace nether
 		uint64_t mFenceValue{};
 		std::array<uint64_t, NUMBER_OF_FRAMES> mFrameFenceValues{};
 
-		// D3D12MA core allocator.
-		D3D12MA::Allocator *mAllocator{};
-
 		const CD3DX12_RECT mScissorRect{ 0, 0, LONG_MAX, LONG_MAX };
 		CD3DX12_VIEWPORT mViewport{};
+
+		Microsoft::WRL::ComPtr<ID3D12Resource> mDepthStencilBuffer{};
+
+		std::vector<Microsoft::WRL::ComPtr<ID3D12GraphicsCommandList2>> mIntermediateResources{};
 
 		// Render 'sandbox' data.
 		Microsoft::WRL::ComPtr<ID3D12RootSignature> mHelloTriangleRootSignature{};
 		Microsoft::WRL::ComPtr<ID3D12PipelineState> mHelloTrianglePipelineState{};
 
-		Microsoft::WRL::ComPtr<ID3D12Resource> mVertexBuffer{};
-		D3D12_VERTEX_BUFFER_VIEW mVertexBufferView{};
-
-		Microsoft::WRL::ComPtr<ID3D12Resource> mConstantBuffer{};
-		UINT8* mConstantBufferPointer{};
+		std::unique_ptr<VertexBuffer> mVertexBuffer{};
+		std::unique_ptr<IndexBuffer> mIndexBuffer{};
+		std::unique_ptr<ConstantBuffer> mConstantBuffer{};
+		MVPBuffer mMvpBuffer{};
 	};
 }

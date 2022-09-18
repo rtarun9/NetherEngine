@@ -3,7 +3,9 @@ set(SRC_FILES
     "Source/NetherEngine/Application.cpp"
     "Source/NetherEngine/Engine.cpp"
     "Source/NetherEngine/Utils.cpp"
-    "Source/NetherEngine/Shader.cpp")
+    "Source/NetherEngine/Shader.cpp"
+    "Source/NetherEngine/Resources.cpp" 
+    "Source/NetherEngine/DescriptorHeap.cpp")
 
 add_executable(NetherEngine WIN32 ${SRC_FILES})
 
@@ -13,6 +15,3 @@ target_include_directories(NetherEngine PUBLIC "Source")
 
 find_path(D3DX12_INCLUDE_DIRS "d3dx12.h")
 target_include_directories(NetherEngine PRIVATE ${D3DX12_INCLUDE_DIRS})
-
-find_package(d3d12-memory-allocator CONFIG REQUIRED)
-target_link_libraries(NetherEngine PRIVATE unofficial::d3d12-memory-allocator)
