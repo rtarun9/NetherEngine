@@ -16,4 +16,10 @@ namespace nether::utils
 	void SetName(ID3D12Object* const object, const std::wstring_view name);
 
 	std::vector<D3D12_INPUT_ELEMENT_DESC> ConstructInputElementDesc(const std::span<InputElementDesc> inputElementDesc);
+
+	template <typename T>
+	static inline constexpr typename std::underlying_type<T>::type EnumClassValue(const T& value)
+	{
+		return static_cast<std::underlying_type<T>::type>(value);
+	}
 }

@@ -8,7 +8,8 @@ set(SRC_FILES
     "Source/NetherEngine/DescriptorHeap.cpp"
     "Source/NetherEngine/Model.cpp"
     "Source/NetherEngine/Device.cpp" 
-    "Source/NetherEngine/CommandQueue.cpp")
+    "Source/NetherEngine/CommandQueue.cpp" 
+    "Source/NetherEngine/Camera.cpp")
 
 add_executable(NetherEngine WIN32 ${SRC_FILES})
 
@@ -21,3 +22,6 @@ target_include_directories(NetherEngine PRIVATE ${D3DX12_INCLUDE_DIRS})
 
 find_path(TINYGLTF_INCLUDE_DIRS "tiny_gltf.h")
 target_include_directories(NetherEngine PRIVATE ${TINYGLTF_INCLUDE_DIRS})
+
+find_package(imgui CONFIG REQUIRED)
+target_link_libraries(NetherEngine PRIVATE imgui::imgui)

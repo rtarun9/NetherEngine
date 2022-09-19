@@ -3,6 +3,7 @@
 #include "Device.hpp"
 #include "Utils.hpp"
 #include "Model.hpp"
+#include "Camera.hpp"
 
 struct alignas(256) MVPBuffer
 {
@@ -33,21 +34,25 @@ namespace nether
 		void LoadContentAndAssets();
 
 	private:
-		bool mIsInitialized{false};
-	
+		bool mIsInitialized{ false };
+
 		Uint2 mClientDimensions{};
-		float mAspectRatio{0.0f};
+		float mAspectRatio{ 0.0f };
 
 		std::wstring mAssetsDirectoryPath{};
 
 		std::unique_ptr<Device> mDevice{};
 
 		// Render 'sandbox' data.
+		Camera mCamera{};
 		Microsoft::WRL::ComPtr<ID3D12RootSignature> mHelloTriangleRootSignature{};
 		Microsoft::WRL::ComPtr<ID3D12PipelineState> mHelloTrianglePipelineState{};
 
 		std::unique_ptr<Model> mCube{};
+		std::unique_ptr<Model> mSponza{};
+
 		std::unique_ptr<ConstantBuffer> mConstantBuffer{};
+		std::unique_ptr<ConstantBuffer> mSponzaConstantBuffer{};
 		MVPBuffer mMvpBuffer{};
 	};
 }

@@ -6,6 +6,11 @@
 #include "Utils.hpp"
 #include "DataTypes.hpp"
 
+#include <imgui_impl_win32.h>
+
+// Forward declare message handler from imgui_impl_win32.cpp.
+extern IMGUI_IMPL_API LRESULT ImGui_ImplWin32_WndProcHandler(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam);
+
 namespace nether
 {
     int Application::Run(Engine* engine, const HINSTANCE instance, const std::wstring_view windowTitle)
@@ -102,6 +107,12 @@ namespace nether
 	LRESULT Application::WindowProc(HWND windowHandle, UINT message, WPARAM wParam, LPARAM lParam)
 	{
         Engine* engine = reinterpret_cast<Engine*>(GetWindowLongPtr(windowHandle, GWLP_USERDATA));
+
+        // Handle ImGUI messages.
+        if (ImGui_ImplWin32_WndProcHandler(windowHandle, message, wParam, lParam))
+        {
+            return true;
+        }
 
         switch (message)
         {

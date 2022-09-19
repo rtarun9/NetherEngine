@@ -24,26 +24,61 @@ namespace nether
 
 		tinygltf::Model model{};
 
-		if (!context.LoadASCIIFromFile(&model, &error, &warning, modelPathStr))
+		if (modelPathStr.find(".glb") != std::string::npos)
 		{
-			if (!error.empty())
+			if (!context.LoadBinaryFromFile(&model, &error, &warning, modelPathStr))
 			{
-				utils::ErrorMessage(utils::StringToWString(error));
-			}
+				if (!error.empty())
+				{
+					utils::ErrorMessage(utils::StringToWString(error));
+				}
 
-			if (!warning.empty())
+				if (!warning.empty())
+				{
+					utils::ErrorMessage(utils::StringToWString(warning));
+				}
+			}
+		}
+		else
+		{
+			if (!context.LoadASCIIFromFile(&model, &error, &warning, modelPathStr))
 			{
-				utils::ErrorMessage(utils::StringToWString(warning));
+				if (!error.empty())
+				{
+					utils::ErrorMessage(utils::StringToWString(error));
+				}
+
+				if (!warning.empty())
+				{
+					utils::ErrorMessage(utils::StringToWString(warning));
+				}
 			}
 		}
 
 		// Build meshes.
 		const tinygltf::Scene& scene = model.scenes[model.defaultScene];
 
-		tinygltf::Node& node = model.nodes[0u];
-		node.mesh = std::max<int32_t>(0u, node.mesh);
+		for (const int& nodeIndex : scene.nodes)
+		{
+			LoadNode(device, nodeIndex, &model);
+		}
+	}
 
-		const tinygltf::Mesh& nodeMesh = model.meshes[node.mesh];
+	void Model::LoadNode(Device* const device, uint32_t nodeIndex, tinygltf::Model* model)
+	{
+		tinygltf::Node& node = model->nodes[nodeIndex];
+		if (node.mesh < 0)
+		{
+			// Load children immediately, as it may have some.
+			for (const int& childrenNodeIndex : node.children)
+			{
+				LoadNode(device, childrenNodeIndex, model);
+			}
+
+			return;
+		}
+
+		const tinygltf::Mesh& nodeMesh = model->meshes[node.mesh];
 		for (size_t i = 0; i < nodeMesh.primitives.size(); ++i)
 		{
 			std::vector<Vertex> vertices{};
@@ -53,27 +88,27 @@ namespace nether
 
 			// Get Accessors, buffer view and buffer for each attribute (position, textureCoord, normal).
 			tinygltf::Primitive primitive = nodeMesh.primitives[i];
-			const tinygltf::Accessor& indexAccesor = model.accessors[primitive.indices];
+			const tinygltf::Accessor& indexAccesor = model->accessors[primitive.indices];
 
 			// Position data.
-			const tinygltf::Accessor& positionAccesor = model.accessors[primitive.attributes["POSITION"]];
-			const tinygltf::BufferView& positionBufferView = model.bufferViews[positionAccesor.bufferView];
-			const tinygltf::Buffer& positionBuffer = model.buffers[positionBufferView.buffer];
+			const tinygltf::Accessor& positionAccesor = model->accessors[primitive.attributes["POSITION"]];
+			const tinygltf::BufferView& positionBufferView = model->bufferViews[positionAccesor.bufferView];
+			const tinygltf::Buffer& positionBuffer = model->buffers[positionBufferView.buffer];
 
 			const int positionByteStride = positionAccesor.ByteStride(positionBufferView);
 			uint8_t const* const positions = &positionBuffer.data[positionBufferView.byteOffset + positionAccesor.byteOffset];
 
 			// TextureCoord data.
-			const tinygltf::Accessor& textureCoordAccesor = model.accessors[primitive.attributes["TEXCOORD_0"]];
-			const tinygltf::BufferView& textureCoordBufferView = model.bufferViews[textureCoordAccesor.bufferView];
-			const tinygltf::Buffer& textureCoordBuffer = model.buffers[textureCoordBufferView.buffer];
+			const tinygltf::Accessor& textureCoordAccesor = model->accessors[primitive.attributes["TEXCOORD_0"]];
+			const tinygltf::BufferView& textureCoordBufferView = model->bufferViews[textureCoordAccesor.bufferView];
+			const tinygltf::Buffer& textureCoordBuffer = model->buffers[textureCoordBufferView.buffer];
 			const int textureCoordBufferStride = textureCoordAccesor.ByteStride(textureCoordBufferView);
 			uint8_t const* const texcoords = &textureCoordBuffer.data[textureCoordBufferView.byteOffset + textureCoordAccesor.byteOffset];
 
 			// Normal data.
-			const tinygltf::Accessor& normalAccesor = model.accessors[primitive.attributes["NORMAL"]];
-			const tinygltf::BufferView& normalBufferView = model.bufferViews[normalAccesor.bufferView];
-			const tinygltf::Buffer& normalBuffer = model.buffers[normalBufferView.buffer];
+			const tinygltf::Accessor& normalAccesor = model->accessors[primitive.attributes["NORMAL"]];
+			const tinygltf::BufferView& normalBufferView = model->bufferViews[normalAccesor.bufferView];
+			const tinygltf::Buffer& normalBuffer = model->buffers[normalBufferView.buffer];
 			const int normalByteStride = normalAccesor.ByteStride(normalBufferView);
 			uint8_t const* const normals = &normalBuffer.data[normalBufferView.byteOffset + normalAccesor.byteOffset];
 
@@ -104,8 +139,8 @@ namespace nether
 			}
 
 			// Get the index buffer data.
-			const tinygltf::BufferView& indexBufferView = model.bufferViews[indexAccesor.bufferView];
-			const tinygltf::Buffer& indexBuffer = model.buffers[indexBufferView.buffer];
+			const tinygltf::BufferView& indexBufferView = model->bufferViews[indexAccesor.bufferView];
+			const tinygltf::Buffer& indexBuffer = model->buffers[indexBufferView.buffer];
 			const int indexByteStride = indexAccesor.ByteStride(indexBufferView);
 			uint8_t const* const indexes = indexBuffer.data.data() + indexBufferView.byteOffset + indexAccesor.byteOffset;
 
@@ -140,6 +175,11 @@ namespace nether
 
 			mVertexBuffers.push_back(std::move(modelVertexBuffer));
 			mIndexBuffers.push_back(std::move(modelIndexBuffer));
+
+			for (const int& childrenNodeIndex : node.children)
+			{
+				LoadNode(device, childrenNodeIndex, model);
+			}
 		}
 	}
 }

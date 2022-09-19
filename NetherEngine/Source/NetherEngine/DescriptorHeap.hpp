@@ -17,6 +17,7 @@ namespace nether
 
 		Descriptor GetDescriptorHandleFromHeapStart() const { return mDescriptorHandleFromHeapStart; }
 		uint32_t GetDescriptorHandleSize() const { return mDescriptorHandleSize; }
+		ID3D12DescriptorHeap* GetDescriptorHeap() const { return mDescriptorHeap.Get(); }
 
 	private:
 		Microsoft::WRL::ComPtr<ID3D12DescriptorHeap> mDescriptorHeap{};

@@ -20,6 +20,7 @@ namespace nether
 		// Getters
 		ID3D12Resource* GetCurrentBackBufferResource() const { return mSwapChainBackBuffers[mCurrentSwapChainBackBufferIndex].Get(); }
 		DescriptorHeap* GetRtvDescriptorHeap() const { return mRtvDescriptorHeap.get(); }
+		DescriptorHeap* GetCbvSrvUavDescriptorHeap() const { return mCbvSrvUavDescriptorHeap.get(); }
 		ID3D12Device5* GetDevice() const { return mDevice.Get(); }
 
 		D3D12_CPU_DESCRIPTOR_HANDLE GetCurrentBackBufferRtvHandle() const;

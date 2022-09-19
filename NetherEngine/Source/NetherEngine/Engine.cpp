@@ -7,10 +7,18 @@
 #include "Shader.hpp"
 #include "DescriptorHeap.hpp"
 
+#include <imgui.h>
+#include <imgui_impl_dx12.h>
+#include <imgui_impl_win32.h>
+
 namespace nether
 {
 	Engine::~Engine()
 	{
+		ImGui_ImplDX12_Shutdown();
+		ImGui_ImplWin32_Shutdown();
+		ImGui::DestroyContext();
+
 		Destroy();
 	}
 	
@@ -25,6 +33,25 @@ namespace nether
 
 		LoadContentAndAssets();
 
+		// TEMP : ImGui stuff.
+		// ImGui stuff.
+		ImGui_ImplWin32_EnableDpiAwareness();
+
+		// Setup Dear ImGui context
+		IMGUI_CHECKVERSION();
+		ImGui::CreateContext();
+		ImGuiIO& io = ImGui::GetIO(); (void)io;
+
+		// Setup Dear ImGui style
+		ImGui::StyleColorsDark();
+
+		Descriptor srvDescriptor = mDevice->GetCbvSrvUavDescriptorHeap()->GetDescriptorHandleFromHeapStart();
+
+		// Setup Platform/Renderer backends
+		ImGui_ImplWin32_Init(windowHandle);
+		ImGui_ImplDX12_Init(mDevice->GetDevice(), NUMBER_OF_FRAMES, SWAP_CHAIN_BACK_BUFFER_FORMAT, mDevice->GetCbvSrvUavDescriptorHeap()->GetDescriptorHeap(),
+			srvDescriptor.cpuDescriptorHandle, srvDescriptor.gpuDescriptorHandle);
+
 		mDevice->mDirectCommandQueue->Flush(mDevice->mCurrentSwapChainBackBufferIndex);
 
 		mIsInitialized = true;
@@ -32,6 +59,8 @@ namespace nether
 
 	void Engine::Update(float deltaTime)
 	{
+		mCamera.Update(deltaTime);
+
 		const DirectX::XMVECTOR eyePosition = DirectX::XMVectorSet(0.0f, 0.0f, -10.0f, 1.0f);
 		const DirectX::XMVECTOR focusPosition = DirectX::XMVectorSet(0.0f, 0.0f, 0.0f, 1.0f);
 		const DirectX::XMVECTOR upDirection = DirectX::XMVectorSet(0.0f, 1.0f, 0.0f, 0.0f);
@@ -42,19 +71,46 @@ namespace nether
 		mMvpBuffer = 
 		{
 			.modelMatrix = DirectX::XMMatrixRotationZ(rotation) * DirectX::XMMatrixRotationX(rotation) * DirectX::XMMatrixRotationY(-rotation),
-			.viewProjectionMatrix = DirectX::XMMatrixLookAtLH(eyePosition, focusPosition, upDirection) * DirectX::XMMatrixPerspectiveFovLH(DirectX::XMConvertToRadians(45.0f), mClientDimensions.x / (float)mClientDimensions.y, 0.1f, 1000.0f)
+			.viewProjectionMatrix = mCamera.GetViewMatrix() * DirectX::XMMatrixPerspectiveFovLH(DirectX::XMConvertToRadians(45.0f), mClientDimensions.x / (float)mClientDimensions.y, 0.1f, 1000.0f)
 		};
 
 		mConstantBuffer->Update(&mMvpBuffer);
+
+		mMvpBuffer =
+		{
+			.modelMatrix = DirectX::XMMatrixScaling(0.1f, 0.1f, 0.1f),
+			.viewProjectionMatrix = mCamera.GetViewMatrix() * DirectX::XMMatrixPerspectiveFovLH(DirectX::XMConvertToRadians(45.0f), mClientDimensions.x / (float)mClientDimensions.y, 0.1f, 1000.0f)
+		};
+
+		mSponzaConstantBuffer->Update(&mMvpBuffer);
 	}
 
 	void Engine::Render()
 	{
 		mDevice->StartFrame();
 		
+		// Start the Dear ImGui frame
+		ImGui_ImplDX12_NewFrame();
+		ImGui_ImplWin32_NewFrame();
+		ImGui::NewFrame();
+
+		ImGui::Begin("Camera Settings");
+		ImGui::SliderFloat("Movement Speed", &mCamera.mMovementSpeed, 0.1f, 1000.0f);
+		ImGui::SliderFloat("Rotation Speed", &mCamera.mRotationSpeed, 0.1f, 10.0f);
+		ImGui::End();
+
+		ImGui::Render();
+
 		auto backBuffer = mDevice->GetCurrentBackBufferResource();
 		auto rtvHandle = mDevice->GetCurrentBackBufferRtvHandle();
 		auto commandList = mDevice->mDirectCommandQueue->GetCommandList(mDevice->GetDevice(), mDevice->mCurrentSwapChainBackBufferIndex);
+
+		const std::array<ID3D12DescriptorHeap* const, 1u> descriptrorHeaps
+		{
+			mDevice->GetCbvSrvUavDescriptorHeap()->GetDescriptorHeap()
+		};
+
+		commandList->SetDescriptorHeaps(1u, descriptrorHeaps.data());
 
 		const CD3DX12_RESOURCE_BARRIER backBufferPresentToRenderTarget = CD3DX12_RESOURCE_BARRIER::Transition(backBuffer, D3D12_RESOURCE_STATE_PRESENT, D3D12_RESOURCE_STATE_RENDER_TARGET);
 		commandList->ResourceBarrier(1u, &backBufferPresentToRenderTarget);
@@ -84,10 +140,24 @@ namespace nether
 			commandList->DrawIndexedInstanced(mCube->mIndexBuffers[i].indicesCount, 1u, 0u, 0u, 0u);
 		}
 
+		for (size_t i : std::views::iota(0u, mSponza->mIndexBuffers.size()))
+		{
+			commandList->IASetVertexBuffers(0u, 1u, &mSponza->mVertexBuffers[i].vertexBufferView);
+			commandList->IASetIndexBuffer(&mSponza->mIndexBuffers[i].indexBufferView);
+
+			commandList->SetGraphicsRootConstantBufferView(0u, mSponzaConstantBuffer->resource->GetGPUVirtualAddress());
+
+			commandList->DrawIndexedInstanced(mSponza->mIndexBuffers[i].indicesCount, 1u, 0u, 0u, 0u);
+		}
+
+		ImGui_ImplDX12_RenderDrawData(ImGui::GetDrawData(), commandList.Get());
+
 		const CD3DX12_RESOURCE_BARRIER backBufferRenderTargetToPresent = CD3DX12_RESOURCE_BARRIER::Transition(backBuffer, D3D12_RESOURCE_STATE_RENDER_TARGET, D3D12_RESOURCE_STATE_PRESENT);
 		commandList->ResourceBarrier(1u, &backBufferRenderTargetToPresent);
 
+
 		mDevice->mDirectCommandQueue->ExecuteCommandLists(commandList, mDevice->mCurrentSwapChainBackBufferIndex);
+
 
 		mDevice->Present();
 		mDevice->EndFrame();
@@ -109,6 +179,8 @@ namespace nether
 
 	void Engine::OnKeyAction(const uint8_t keycode, const bool isKeyDown)
 	{
+		mCamera.HandleInput(keycode, isKeyDown);
+
 		if (isKeyDown && keycode == VK_F5)
 		{
 			mDevice->SetVsync(true);
@@ -222,6 +294,8 @@ namespace nether
 		
 		// Create Model.
 		mCube = std::make_unique<Model>(GetAssetPath(L"Models/Box/glTF/Box.gltf"), mDevice.get());
+		mSponza = std::make_unique<Model>(GetAssetPath(L"Models/sponza-gltf-pbr/sponza.glb"), mDevice.get());
+		//mSponza = std::make_unique<Model>(GetAssetPath(L"Models/IntelSponza/Main/NewSponza_Main_Blender_glTF.gltf"), mDevice.get());
 
 		ConstantBufferCreationDesc constantBufferCreationDesc
 		{
@@ -229,6 +303,7 @@ namespace nether
 		};
 
 		mConstantBuffer = std::make_unique<ConstantBuffer>(mDevice->CreateConstantBuffer(constantBufferCreationDesc, L"Constant Buffer"));
+		mSponzaConstantBuffer = std::make_unique<ConstantBuffer>(mDevice->CreateConstantBuffer(constantBufferCreationDesc, L"Sponza Constant Buffer"));
 
 		mDevice->mDirectCommandQueue->Flush(mDevice->mCurrentSwapChainBackBufferIndex);
 	}
