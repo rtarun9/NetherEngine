@@ -4,15 +4,15 @@
 
 namespace nether
 {
-	class Engine;
+	class Device;
 	
 	class Model
 	{
 	public:
-		Model(const std::wstring_view modelAssetPath, Engine* engine);
+		Model(const std::wstring_view modelAssetPath, Device* const device);
 
 	public:
-		std::vector<std::unique_ptr<VertexBuffer>> mVertexBuffers{};
-		std::vector<std::unique_ptr<IndexBuffer>> mIndexBuffers{};
+		std::vector<VertexBuffer> mVertexBuffers{};
+		std::vector<IndexBuffer> mIndexBuffers{};
 	};
 }

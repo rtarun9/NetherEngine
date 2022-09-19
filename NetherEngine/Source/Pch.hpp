@@ -17,6 +17,7 @@ constexpr bool NETHER_DEBUG_BUILD = false;
 #include <stdexcept>
 #include <ranges>
 #include <cassert>
+#include <queue>
 #include <array>
 #include <chrono>
 

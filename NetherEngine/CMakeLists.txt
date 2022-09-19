@@ -6,7 +6,9 @@ set(SRC_FILES
     "Source/NetherEngine/Shader.cpp"
     "Source/NetherEngine/Resources.cpp" 
     "Source/NetherEngine/DescriptorHeap.cpp"
-    "Source/NetherEngine/Model.cpp")
+    "Source/NetherEngine/Model.cpp"
+    "Source/NetherEngine/Device.cpp" 
+    "Source/NetherEngine/CommandQueue.cpp")
 
 add_executable(NetherEngine WIN32 ${SRC_FILES})
 

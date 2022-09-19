@@ -1,8 +1,7 @@
 #include "Model.hpp"
 
+#include "Device.hpp"
 #include "Utils.hpp"
-#include "DataTypes.hpp"
-#include "Engine.hpp"
 
 #define TINYGLTF_IMPLEMENTATION
 #define TINYGLTF_NO_EXTERNAL_IMAGE 
@@ -12,7 +11,7 @@
 
 namespace nether
 {
-	Model::Model(const std::wstring_view modelAssetPath, Engine* engine)
+	Model::Model(const std::wstring_view modelAssetPath, Device* const device)
 	{
 		// Use tinyobj loader to load the model.
 
@@ -136,8 +135,8 @@ namespace nether
 				.format = DXGI_FORMAT_R32_UINT,
 			};
 
-			std::unique_ptr<VertexBuffer> modelVertexBuffer = engine->CreateVertexBuffer(vertexBufferCreationDesc, vertices.data(), L"Vertex Buffer");
-			std::unique_ptr<IndexBuffer> modelIndexBuffer = engine->CreateIndexBuffer(indexBufferCreationDesc, indices.data(), L"Index Buffer");
+			VertexBuffer modelVertexBuffer = device->CreateVertexBuffer(vertexBufferCreationDesc, vertices.data(), L"Vertex Buffer");
+			IndexBuffer modelIndexBuffer = device->CreateIndexBuffer(indexBufferCreationDesc, indices.data(), L"Index Buffer");
 
 			mVertexBuffers.push_back(std::move(modelVertexBuffer));
 			mIndexBuffers.push_back(std::move(modelIndexBuffer));
