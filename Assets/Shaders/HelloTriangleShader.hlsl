@@ -23,7 +23,7 @@ VsOutput VsMain(VsInput input)
 {
     VsOutput output;
     output.position = mul(float4(input.position, 1.0f), mul(mvpBuffer.modelMatrix, mvpBuffer.viewProjectionMatrix));
-    output.color = input.position;
+    output.color = 2.0f * input.position - 1.0f;
 
     return output;
 }
