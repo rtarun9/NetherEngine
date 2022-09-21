@@ -9,6 +9,8 @@ set(SRC_FILES
 	"Source/Core/Main.cpp"
 	"Source/Loaders/ModelLoader.hpp"
 	"Source/Loaders/ModelLoader.cpp"
+	"Source/Loaders/TextureLoader.hpp"
+	"Source/Loaders/TextureLoader.cpp"
 	"Source/Rendering/CommandQueue.hpp"
 	"Source/Rendering/CommandQueue.cpp"
 	"Source/Rendering/DescriptorHeap.hpp"
@@ -27,8 +29,7 @@ set(SRC_FILES
 	"Source/Scene/GameObject.cpp")
 
 set(PCHHeader
-	"Source/Pch.hpp"
-)
+	"Source/Pch.hpp")
 
 add_executable(NetherEngine WIN32 ${SRC_FILES})
 target_precompile_headers(NetherEngine PUBLIC ${PCHHeader})
@@ -42,5 +43,3 @@ target_include_directories(NetherEngine PRIVATE ${D3DX12_INCLUDE_DIRS} ${TINYGLT
 
 target_link_libraries(NetherEngine PUBLIC d3d12.lib dxgi.lib dxguid.lib dxcompiler.lib)
 target_link_libraries(NetherEngine PRIVATE imgui::imgui)
-
-

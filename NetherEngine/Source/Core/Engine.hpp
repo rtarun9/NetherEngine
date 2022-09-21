@@ -35,6 +35,7 @@ namespace nether::core
 		float mAspectRatio{ 0.0f };
 
 		std::wstring mAssetsDirectoryPath{};
+		std::wstring mRootDirectoryPath{};
 
 		std::unique_ptr<rendering::Device> mDevice{};
 

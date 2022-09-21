@@ -23,7 +23,16 @@ namespace nether::scene
 		loaders::ModelLoader modelLoader(modelPath);
 
 		const size_t meshesCount = modelLoader.mMeshes.size();
-		
+		const size_t materialCount = modelLoader.mMaterials.size();
+
+		mMeshCount = meshesCount;
+
+		mVertexBuffers.reserve(meshesCount);
+		mIndexBuffers.reserve(meshesCount);
+		mMaterialIndices.reserve(meshesCount);
+
+		mAlbedoTextures.reserve(materialCount);
+
 		for (size_t i : std::views::iota(0u, meshesCount))
 		{
 			const rendering::VertexBufferCreationDesc vertexBufferCreationDesc
@@ -44,6 +53,13 @@ namespace nether::scene
 
 			mVertexBuffers.push_back(std::move(modelVertexBuffer));
 			mIndexBuffers.push_back(std::move(modelIndexBuffer));
+			mMaterialIndices.push_back(modelLoader.mMeshes[i].materialIndex);
+		}
+
+		for (size_t i : std::views::iota(0u, materialCount))
+		{
+			rendering::Texture albedoTexture = device->CreateTexture(modelLoader.mMaterials[i].albedoTexturePaths);
+			mAlbedoTextures.push_back(std::move(albedoTexture));
 		}
 	}
 }

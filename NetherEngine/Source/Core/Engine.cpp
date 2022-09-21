@@ -40,7 +40,15 @@ namespace nether::core
 		// Setup Dear ImGui context
 		IMGUI_CHECKVERSION();
 		ImGui::CreateContext();
-		ImGuiIO& io = ImGui::GetIO(); (void)io;
+		ImGuiIO& io = ImGui::GetIO();
+
+		// Not really working for now.
+		/*
+		const std::wstring iniFilePath = mRootDirectoryPath + L"imgui.ini";
+		const std::filesystem::path relativeIniFilePath = std::filesystem::relative(iniFilePath);
+		const std::string relativeFilePathStr = relativeIniFilePath.string();
+		io.IniFilename = relativeFilePathStr.c_str();
+		*/
 
 		// Setup Dear ImGui style
 		ImGui::StyleColorsDark();
@@ -130,26 +138,29 @@ namespace nether::core
 		
 		commandList->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
 
-		const size_t cubeIndicesCount = mCube->GetIndicesCount();
+		const size_t cubeMeshesCount = mCube->mMeshCount;
 
-		for (size_t i : std::views::iota(0u, cubeIndicesCount))
+		for (size_t i : std::views::iota(0u, cubeMeshesCount))
 		{
 			commandList->IASetVertexBuffers(0u, 1u, &mCube->mVertexBuffers[i].vertexBufferView);
 			commandList->IASetIndexBuffer(&mCube->mIndexBuffers[i].indexBufferView);
 
 			commandList->SetGraphicsRootConstantBufferView(0u, mCube->GetTransformConstantBuffer()->resource->GetGPUVirtualAddress());
-			
+			commandList->SetGraphicsRootDescriptorTable(1u, mCube->mAlbedoTextures[mCube->mMaterialIndices[i]].gpuDescriptorHandle);
+
 			commandList->DrawIndexedInstanced(mCube->mIndexBuffers[i].indicesCount, 1u, 0u, 0u, 0u);
 		}
 
-		const size_t sponzaIndicesCount = mSponza->GetIndicesCount();
+		const size_t sponzaMeshCount = mSponza->mMeshCount;
 
-		for (size_t i : std::views::iota(0u, sponzaIndicesCount))
+		for (size_t i : std::views::iota(0u, sponzaMeshCount))
 		{
 			commandList->IASetVertexBuffers(0u, 1u, &mSponza->mVertexBuffers[i].vertexBufferView);
 			commandList->IASetIndexBuffer(&mSponza->mIndexBuffers[i].indexBufferView);
 
 			commandList->SetGraphicsRootConstantBufferView(0u, mSponza->GetTransformConstantBuffer()->resource->GetGPUVirtualAddress());
+
+			commandList->SetGraphicsRootDescriptorTable(1u, mSponza->mAlbedoTextures[mSponza->mMaterialIndices[i]].gpuDescriptorHandle);
 
 			commandList->DrawIndexedInstanced(mSponza->mIndexBuffers[i].indicesCount, 1u, 0u, 0u, 0u);
 		}
@@ -218,6 +229,7 @@ namespace nether::core
 			utils::ErrorMessage(L"Assets Directory that was located is not a directory!");
 		}
 
+		mRootDirectoryPath = currentDirectory.wstring() + L"/";
 		mAssetsDirectoryPath = currentDirectory.wstring() + L"/Assets/";
 	}
 
@@ -231,6 +243,8 @@ namespace nether::core
 		rendering::Shader vertexShader = rendering::ShaderCompiler::GetInstance().CompilerShader(rendering::ShaderType::Vertex, GetAssetPath(L"Shaders/HelloTriangleShader.hlsl"));
 		rendering::Shader pixelShader =  rendering::ShaderCompiler::GetInstance().CompilerShader(rendering::ShaderType::Pixel, GetAssetPath(L"Shaders/HelloTriangleShader.hlsl"));
 
+		vertexShader.shaderReflection.rootParameters.insert(vertexShader.shaderReflection.rootParameters.end(), pixelShader.shaderReflection.rootParameters.begin(), pixelShader.shaderReflection.rootParameters.end());
+		
 		// Create root signature.
 		// Get the highest supported root signature version.
 		D3D12_FEATURE_DATA_ROOT_SIGNATURE featureData
@@ -243,6 +257,23 @@ namespace nether::core
 			featureData.HighestVersion = D3D_ROOT_SIGNATURE_VERSION_1_1;
 		}
 
+		D3D12_STATIC_SAMPLER_DESC staticSampler
+		{
+			.Filter = D3D12_FILTER_MIN_MAG_MIP_POINT,
+			.AddressU = D3D12_TEXTURE_ADDRESS_MODE_WRAP,
+			.AddressV = D3D12_TEXTURE_ADDRESS_MODE_WRAP,
+			.AddressW = D3D12_TEXTURE_ADDRESS_MODE_WRAP,
+			.MipLODBias = 0,
+			.MaxAnisotropy = 0,
+			.ComparisonFunc = D3D12_COMPARISON_FUNC_NEVER,
+			.BorderColor = D3D12_STATIC_BORDER_COLOR_TRANSPARENT_BLACK,
+			.MinLOD = 0.0f,
+			.MaxLOD = D3D12_FLOAT32_MAX,
+			.ShaderRegister = 0,
+			.RegisterSpace = 1,
+			.ShaderVisibility = D3D12_SHADER_VISIBILITY_PIXEL,
+		};
+
 		const D3D12_VERSIONED_ROOT_SIGNATURE_DESC  rootSignatureDesc
 		{
 			.Version = featureData.HighestVersion,
@@ -250,18 +281,23 @@ namespace nether::core
 			{
 				.NumParameters = static_cast<uint32_t>(vertexShader.shaderReflection.rootParameters.size()),
 				.pParameters = vertexShader.shaderReflection.rootParameters.data(),
-				.Flags = D3D12_ROOT_SIGNATURE_FLAG_ALLOW_INPUT_ASSEMBLER_INPUT_LAYOUT,
+				.NumStaticSamplers = 1u,
+				.pStaticSamplers = &staticSampler,
+				.Flags = D3D12_ROOT_SIGNATURE_FLAG_ALLOW_INPUT_ASSEMBLER_INPUT_LAYOUT
 			}
 		};
 
 		Microsoft::WRL::ComPtr<ID3DBlob> rootSignatureBlob{};
 		Microsoft::WRL::ComPtr<ID3DBlob> errorBlob{};
-		utils::ThrowIfFailed(::D3D12SerializeVersionedRootSignature(&rootSignatureDesc, &rootSignatureBlob, &errorBlob));
+		if (FAILED(::D3D12SerializeVersionedRootSignature(&rootSignatureDesc, &rootSignatureBlob, &errorBlob)))
+		{
+			const char *message = (const char*)errorBlob->GetBufferPointer();
+			utils::ErrorMessage(message);
+		}
+
 		utils::ThrowIfFailed(mDevice->GetDevice()->CreateRootSignature(0u, rootSignatureBlob->GetBufferPointer(), rootSignatureBlob->GetBufferSize(), IID_PPV_ARGS(&mHelloTriangleRootSignature)));
 
 		const std::vector<D3D12_INPUT_ELEMENT_DESC> inputElementDesc = ConstructInputElementDesc(vertexShader.shaderReflection.inputElementDescs);
-		// temp : vertexShader.shaderReflection.rootParameters.insert(vertexShader.shaderReflection.rootParameters.end(), pixelShader.shaderReflection.rootParameters.begin(), pixelShader.shaderReflection.rootParameters.end());
-
 
 		// Create graphics pipeline state.
 		const D3D12_GRAPHICS_PIPELINE_STATE_DESC pipelineStateDesc
@@ -297,7 +333,7 @@ namespace nether::core
 		utils::ThrowIfFailed(mDevice->GetDevice()->CreateGraphicsPipelineState(&pipelineStateDesc, IID_PPV_ARGS(&mHelloTrianglePipelineState)));
 		
 		// Create Model.
-		mCube = std::make_unique<scene::GameObject>(mDevice.get(), GetAssetPath(L"Models/Box/glTF/Box.gltf"), L"Cube Model");
+		mCube = std::make_unique<scene::GameObject>(mDevice.get(), GetAssetPath(L"Models/Cube/glTF/Cube.gltf"), L"Cube Model");
 		mSponza = std::make_unique<scene::GameObject>(mDevice.get(), GetAssetPath(L"Models/sponza-gltf-pbr/sponza.glb"), L"Sponza Model");
 
 		mDevice->GetDirectCommandQueue()->Flush(mDevice->GetCurrentSwapChainBackBufferIndex());

@@ -4,7 +4,6 @@
 
 #define TINYGLTF_IMPLEMENTATION
 #define TINYGLTF_NO_EXTERNAL_IMAGE 
-#define STB_IMAGE_IMPLEMENTATION
 #define STB_IMAGE_WRITE_IMPLEMENTATION
 #include <tiny_gltf.h>
 
@@ -15,6 +14,12 @@ namespace nether::loaders
 		// Use tinyobj loader to load the model.
 
 		const std::string modelPathStr = utils::WStringToString(modelAssetPath);
+
+		if (modelPathStr.find_last_of("/\\") != std::string::npos)
+		{
+			const std::string modelDirectoryPathStr = modelPathStr.substr(0, modelPathStr.find_last_of("/\\")) + "/";
+			mModelDirectory = utils::StringToWString(modelDirectoryPathStr);
+		}
 
 		std::string warning{};
 		std::string error{};
@@ -53,6 +58,9 @@ namespace nether::loaders
 				}
 			}
 		}
+
+		// Load materials
+		LoadMaterials(&model);
 
 		// Build meshes.
 		const tinygltf::Scene& scene = model.scenes[model.defaultScene];
@@ -155,12 +163,36 @@ namespace nether::loaders
 				}
 			}
 
+			mesh.materialIndex = primitive.material;
+
 			mMeshes.push_back(mesh);
+
 
 			for (const int& childrenNodeIndex : node.children)
 			{
 				LoadNode(childrenNodeIndex, model);
 			}
 		}
+	}
+
+	void ModelLoader::LoadMaterials(tinygltf::Model* const model)
+	{
+		mMaterials.reserve(model->materials.size());
+
+		for (const tinygltf::Material& material : model->materials)
+		{
+			if (material.pbrMetallicRoughness.baseColorTexture.index >= 0)
+			{
+				tinygltf::Texture& albedoTexture = model->textures[material.pbrMetallicRoughness.baseColorTexture.index];
+				tinygltf::Image& albedoImage = model->images[albedoTexture.source];
+			
+				const std::wstring path = mModelDirectory + utils::StringToWString(albedoImage.uri);
+				mMaterials.emplace_back(Material{path});
+			}
+			else
+			{
+				mMaterials.emplace_back(Material{ mModelDirectory + L"../../Textures/Prototype.png" });
+			}
+		};
 	}
 }

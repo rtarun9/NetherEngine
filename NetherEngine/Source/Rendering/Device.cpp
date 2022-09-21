@@ -4,6 +4,8 @@
 #include "DescriptorHeap.hpp"
 #include "Device.hpp"
 
+#include "Loaders/TextureLoader.hpp"
+
 #include "Common/DataTypes.hpp"
 #include "Common/Utils.hpp"
 
@@ -157,7 +159,7 @@ namespace nether::rendering
 		// Create descriptor heaps.
 		mRtvDescriptorHeap = std::make_unique<DescriptorHeap>(mDevice.Get(), D3D12_DESCRIPTOR_HEAP_TYPE_RTV, 5u, L"RTV Descriptor Heap");
 		mDsvDescriptorHeap = std::make_unique<DescriptorHeap>(mDevice.Get(), D3D12_DESCRIPTOR_HEAP_TYPE_DSV, 5u, L"DSV Descriptor Heap");
-		mCbvSrvUavDescriptorHeap = std::make_unique<DescriptorHeap>(mDevice.Get(), D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV, 5u, L"CBV SRV UAV Descriptor Heap");
+		mCbvSrvUavDescriptorHeap = std::make_unique<DescriptorHeap>(mDevice.Get(), D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV, 500u, L"CBV SRV UAV Descriptor Heap");
 		mSamplerDescriptorHeap = std::make_unique<DescriptorHeap>(mDevice.Get(), D3D12_DESCRIPTOR_HEAP_TYPE_SAMPLER, 5u, L"Sampler Descriptor Heap");
 
 		CreateRenderTargetViews(clientDimensions);
@@ -344,5 +346,81 @@ namespace nether::rendering
 
 		SetName(constantBuffer.resource.Get(), bufferName);
 		return constantBuffer;
+	}
+
+	Texture Device::CreateTexture(const std::wstring_view texturePath)
+	{
+		const loaders::TextureLoader textureLoader{texturePath};
+
+		Texture texture
+		{
+			.textureDimension = 
+			{
+				.x = static_cast<uint32_t>(textureLoader.mTextureWidth),
+				.y = static_cast<uint32_t>(textureLoader.mTextureHeight)
+            }
+		};
+
+		if (!textureLoader.mData)
+		{
+			utils::ErrorMessage(L"Cannot create index buffer with no data.");
+		}
+
+		// Create destination resource (on GPU only memory).
+		Microsoft::WRL::ComPtr<ID3D12Resource> destinationResource{};
+
+		const CD3DX12_HEAP_PROPERTIES defaultHeapProperties(D3D12_HEAP_TYPE_DEFAULT);
+		CD3DX12_RESOURCE_DESC destinationResourceDesc = CD3DX12_RESOURCE_DESC::Tex2D(DXGI_FORMAT_R8G8B8A8_UNORM_SRGB, texture.textureDimension.x, texture.textureDimension.y);
+
+		utils::ThrowIfFailed(mDevice->CreateCommittedResource(&defaultHeapProperties, D3D12_HEAP_FLAG_NONE, &destinationResourceDesc, D3D12_RESOURCE_STATE_COPY_DEST, nullptr, IID_PPV_ARGS(&destinationResource)));
+
+		const UINT64 uploadBufferSize = GetRequiredIntermediateSize(destinationResource.Get(), 0, 1);
+
+		// Create intermediate resource (to copy data from CPU - GPU shared memory to GPU only memory).
+		Microsoft::WRL::ComPtr<ID3D12Resource> intermediateResource{};
+
+		const CD3DX12_HEAP_PROPERTIES uploadHeapProperties(D3D12_HEAP_TYPE_UPLOAD);
+
+		const CD3DX12_RESOURCE_DESC intermediateResourceDesc = CD3DX12_RESOURCE_DESC::Buffer(uploadBufferSize);
+
+		utils::ThrowIfFailed(mDevice->CreateCommittedResource(&uploadHeapProperties, D3D12_HEAP_FLAG_NONE, &intermediateResourceDesc, D3D12_RESOURCE_STATE_GENERIC_READ, nullptr, IID_PPV_ARGS(&intermediateResource)));
+		SetName(intermediateResource.Get(), L"Texture Intermediate resource");
+
+		const D3D12_SUBRESOURCE_DATA subresourceData
+		{
+			.pData = textureLoader.mData,
+			.RowPitch = static_cast<LONG_PTR>(texture.textureDimension.x * textureLoader.mTextureChannels),
+			.SlicePitch = static_cast<LONG_PTR>(texture.textureDimension.x * texture.textureDimension.y *  textureLoader.mTextureChannels)
+		};
+
+		auto commandList = mDirectCommandQueue->GetCommandList(mDevice.Get(), mCurrentSwapChainBackBufferIndex);
+		UpdateSubresources(commandList.Get(), destinationResource.Get(), intermediateResource.Get(), 0u, 0u, 1u, &subresourceData);
+		
+		// Create SRV for texture.
+		const D3D12_SHADER_RESOURCE_VIEW_DESC srvDesc
+		{
+			.Format = DXGI_FORMAT_R8G8B8A8_UNORM_SRGB,
+			.ViewDimension = D3D12_SRV_DIMENSION_TEXTURE2D,
+			.Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING,
+			.Texture2D
+			{
+				.MipLevels = 1u
+            }
+		};
+
+		const CD3DX12_RESOURCE_BARRIER copyDestToPixelShaderResourceBarrier = CD3DX12_RESOURCE_BARRIER::Transition(destinationResource.Get(), D3D12_RESOURCE_STATE_COPY_DEST, D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
+		commandList->ResourceBarrier(1u, &copyDestToPixelShaderResourceBarrier);
+
+		mDevice->CreateShaderResourceView(destinationResource.Get(), &srvDesc, mCbvSrvUavDescriptorHeap->GetCurrentDescriptorHeap().cpuDescriptorHandle);
+		texture.gpuDescriptorHandle = mCbvSrvUavDescriptorHeap->GetCurrentDescriptorHeap().gpuDescriptorHandle;
+
+		mCbvSrvUavDescriptorHeap->OffsetCurrentDescriptor();
+
+		mDirectCommandQueue->ExecuteCommandLists(commandList, mCurrentSwapChainBackBufferIndex);
+		mDirectCommandQueue->Flush(mCurrentSwapChainBackBufferIndex);
+
+		texture.resource = destinationResource.Get();
+
+		return texture;
 	}
 }

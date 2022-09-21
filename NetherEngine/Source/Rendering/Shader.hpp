@@ -8,6 +8,7 @@ namespace nether::rendering
 	{
 		std::vector<InputElementDesc> inputElementDescs{};
 		std::vector<D3D12_ROOT_PARAMETER1> rootParameters{};
+		std::vector<D3D12_DESCRIPTOR_RANGE1> descriptorRanges{};
 	};
 
 	// Hold the shader blob and shader reflection data.

@@ -40,7 +40,6 @@ namespace nether::rendering
 		void SetVsync(const bool vsync);
 
 	public:
-
 		// Core function's.
 		void Resize(const Uint2& clientDimensions);
 
@@ -53,6 +52,8 @@ namespace nether::rendering
 		VertexBuffer CreateVertexBuffer(const VertexBufferCreationDesc& vertexBufferCreationDesc, void* data, const std::wstring_view bufferName);
 		IndexBuffer CreateIndexBuffer(const IndexBufferCreationDesc& indexBufferCreationDesc, void* data, const std::wstring_view bufferName);
 		ConstantBuffer CreateConstantBuffer(const ConstantBufferCreationDesc& constantBufferCreationDesc, const std::wstring_view bufferName);
+
+		Texture CreateTexture(const std::wstring_view texturePath);
 
 	private:
 		bool mVsync{ true };

@@ -1,5 +1,7 @@
 #pragma once
 
+#include "Common/DataTypes.hpp"
+
 namespace nether::rendering
 {
 	// All resource related data structures.
@@ -10,7 +12,7 @@ namespace nether::rendering
 		std::string semanticName{};
 		D3D12_INPUT_ELEMENT_DESC inputElementDesc{};
 	};
-	
+
 	struct VertexBufferCreationDesc
 	{
 		uint32_t numberOfElements{};
@@ -49,5 +51,14 @@ namespace nether::rendering
 		uint8_t* mappedBufferPointer{};
 
 		void Update(void* data);
+	};
+
+	struct Texture
+	{
+		Microsoft::WRL::ComPtr<ID3D12Resource> resource{};
+		Uint2 textureDimension{};
+
+		// note(rtarun9) : TEMP, needs to change when more complex materials are to be used.
+		D3D12_GPU_DESCRIPTOR_HANDLE gpuDescriptorHandle{};
 	};
 }

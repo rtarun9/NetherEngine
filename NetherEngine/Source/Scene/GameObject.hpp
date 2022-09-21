@@ -23,13 +23,16 @@ namespace nether::scene
 		GameObject(rendering::Device* const device, const std::wstring_view modelPath, const std::wstring_view objectName);
 
 		// Getters.
-		size_t GetIndicesCount() const { return mIndexBuffers.size(); }
 		rendering::ConstantBuffer* GetTransformConstantBuffer() const { return mTransformBuffer.get(); }
 
 	public:
 		std::vector<rendering::VertexBuffer> mVertexBuffers{};
 		std::vector<rendering::IndexBuffer> mIndexBuffers{};
+		std::vector<uint32_t> mMaterialIndices{};
 
+		uint32_t mMeshCount{};
+
+		std::vector<rendering::Texture> mAlbedoTextures{};
 		std::unique_ptr<rendering::ConstantBuffer> mTransformBuffer{};
 	};
 }

@@ -35,8 +35,10 @@ constexpr bool NETHER_DEBUG_BUILD = false;
 #include <dxgi1_6.h>
 #include <wrl.h>
 #include <DirectXMath.h>
-#include <d3dx12.h>
 #include <d3d12shader.h>
 
 // DXC API includes.
 #include <dxcapi.h>
+
+// D3DX12 header.
+#include "Rendering/d3dx12.hpp"

@@ -103,26 +103,27 @@ namespace nether::rendering
 			.Encoding = 0
 		};
 
+		Shader shader{};
+
 		Microsoft::WRL::ComPtr<ID3D12ShaderReflection> shaderReflection{};
 		mUtils->CreateReflection(&reflectionBuffer, IID_PPV_ARGS(&shaderReflection));
 		D3D12_SHADER_DESC shaderDesc{};
 		shaderReflection->GetDesc(&shaderDesc);
 
 		// Get the input element desc's from the shader reflection desc.
-		std::vector<InputElementDesc> inputElementDescs{};
-		inputElementDescs.reserve(shaderDesc.InputParameters);
+		shader.shaderReflection.inputElementDescs.reserve(shaderDesc.InputParameters);
 
 		for (uint32_t i : std::views::iota(0u, shaderDesc.InputParameters))
 		{
 			D3D12_SIGNATURE_PARAMETER_DESC inputParameterDesc{};
 			utils::ThrowIfFailed(shaderReflection->GetInputParameterDesc(i, &inputParameterDesc));
 
-			DXGI_FORMAT inputElementFormat{DXGI_FORMAT_UNKNOWN};
+			DXGI_FORMAT inputElementFormat{ DXGI_FORMAT_UNKNOWN };
 			// 15 is 1111 in binary, so a 4 component element.
 			// 7 is 111 in binary, so a 3 component element.
 			// 3 is 11 in binary, so a 2 component element.
 			// 1 is 1 in binary, so a 1 component element.
-			switch(inputParameterDesc.ComponentType)
+			switch (inputParameterDesc.ComponentType)
 			{
 			case D3D_REGISTER_COMPONENT_FLOAT32:
 			{
@@ -194,14 +195,19 @@ namespace nether::rendering
 				.AlignedByteOffset = D3D12_APPEND_ALIGNED_ELEMENT,
 			};
 
-			inputElementDescs.emplace_back(InputElementDesc{ .semanticName = inputParameterDesc.SemanticName, .inputElementDesc = inputElementDesc });
+			shader.shaderReflection.inputElementDescs.emplace_back(InputElementDesc{ .semanticName = inputParameterDesc.SemanticName, .inputElementDesc = inputElementDesc });
 		}
 
 		// Get root parameters from shader reflection data (constant buffers views will be exclusively used for now).
-		std::vector<D3D12_ROOT_PARAMETER1> rootParameters{};
-		rootParameters.reserve(shaderDesc.ConstantBuffers);
+		shader.shaderReflection.rootParameters.reserve(shaderDesc.BoundResources);
 
-		for (uint32_t i : std::views::iota(0u, shaderDesc.ConstantBuffers))
+		// Each shader will have all resources in specific spaces (0 for vertex shader, 1 for pixel shaders).
+		// SRV's will all be in the same space (as an assumption) and in a descriptor table.
+		// For this, the loop will only count number of descriptor's, and after the loop the descriptor range (and the table) will be filled.
+		uint32_t srvDescriptorCount{};
+		uint32_t registerSpace{};
+
+		for (uint32_t i : std::views::iota(0u, shaderDesc.BoundResources))
 		{
 			D3D12_SHADER_INPUT_BIND_DESC shaderInputBindDesc{};
 			utils::ThrowIfFailed(shaderReflection->GetResourceBindingDesc(i, &shaderInputBindDesc));
@@ -225,24 +231,65 @@ namespace nether::rendering
 					}
 				};
 
-				rootParameters.emplace_back(rootParameter);
+				shader.shaderReflection.rootParameters.emplace_back(rootParameter);
+			}break;
+
+			case D3D_SIT_TEXTURE:
+			{
+				srvDescriptorCount++;
+				registerSpace = shaderInputBindDesc.Space;
 			}break;
 			}
 		}
 
+		if (srvDescriptorCount > 0)
+		{
+			// Fill the descriptor range.
+			const D3D12_DESCRIPTOR_RANGE1 srvDescriptorRange
+			{
+				.RangeType = D3D12_DESCRIPTOR_RANGE_TYPE_SRV,
+				.NumDescriptors = srvDescriptorCount,
+				.RegisterSpace = registerSpace,
+				.Flags = D3D12_DESCRIPTOR_RANGE_FLAG_DATA_STATIC,
+				.OffsetInDescriptorsFromTableStart = D3D12_DESCRIPTOR_RANGE_OFFSET_APPEND
+			};
+
+			shader.shaderReflection.descriptorRanges.push_back(srvDescriptorRange);
+
+			D3D12_SHADER_VISIBILITY shaderVisibility{};
+			switch (shaderType)
+			{
+			case ShaderType::Vertex:
+			{
+				shaderVisibility = D3D12_SHADER_VISIBILITY_VERTEX;
+			}break;
+
+			case ShaderType::Pixel:
+			{
+				shaderVisibility = D3D12_SHADER_VISIBILITY_PIXEL;
+			}break;
+			}
+
+			// Create the descriptor table.
+			const D3D12_ROOT_PARAMETER1 srvDescriptorTable
+			{
+				.ParameterType = D3D12_ROOT_PARAMETER_TYPE_DESCRIPTOR_TABLE,
+				.DescriptorTable
+				{
+					.NumDescriptorRanges = static_cast<uint32_t>(shader.shaderReflection.descriptorRanges.size()),
+					.pDescriptorRanges = shader.shaderReflection.descriptorRanges.data(),
+				},
+				.ShaderVisibility = shaderVisibility,
+			};
+
+			shader.shaderReflection.rootParameters.push_back(srvDescriptorTable);
+		}
+	
 		// Get the shader bytecode (compiled shader output) and return.
 		IDxcBlob* compiledShaderBlob{ nullptr };
 		compiledShaderBuffer->GetOutput(DXC_OUT_OBJECT, IID_PPV_ARGS(&compiledShaderBlob), nullptr);
 
-		Shader shader
-		{
-			.shaderBlob = compiledShaderBlob,
-			.shaderReflection
-			{
-				.inputElementDescs = std::move(inputElementDescs),
-				.rootParameters = std::move(rootParameters)
-            }
-		};
+		shader.shaderBlob = compiledShaderBlob;
 
 		return shader;
 	}
