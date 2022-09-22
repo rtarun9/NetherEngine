@@ -4,6 +4,8 @@
 
 namespace nether
 {
+	// WASD : Camera position.
+	// Arrow keys : Camera orientation.
 	enum class Keys : uint8_t
 	{
 		W,
@@ -35,9 +37,7 @@ namespace nether
 		DirectX::XMFLOAT3 mCameraFront{WORLD_FRONT};
 		DirectX::XMFLOAT3 mCameraUp{ WORLD_UP };
 		DirectX::XMFLOAT3 mCameraRight{ WORLD_RIGHT };
-
 		DirectX::XMFLOAT3 mCameraTarget{};
-
 		DirectX::XMFLOAT3 mCameraPosition{ WORLD_RIGHT };
 
 		float mMovementSpeed{5.0f};

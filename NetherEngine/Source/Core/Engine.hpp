@@ -31,6 +31,8 @@ namespace nether::core
 	private:
 		bool mIsInitialized{ false };
 
+		HWND mWindowHandle{};
+
 		Uint2 mClientDimensions{};
 		float mAspectRatio{ 0.0f };
 
@@ -44,9 +46,23 @@ namespace nether::core
 		Microsoft::WRL::ComPtr<ID3D12RootSignature> mHelloTriangleRootSignature{};
 		Microsoft::WRL::ComPtr<ID3D12PipelineState> mHelloTrianglePipelineState{};
 
-		std::unique_ptr<scene::GameObject> mCube{};
-		std::unique_ptr<scene::GameObject> mSponza{};
+		std::unordered_map<std::wstring, std::unique_ptr<scene::GameObject>> mGameObjects{};
 
-		MVPBuffer mMvpBuffer{};
+		struct alignas(256) SceneConstantBufferData
+		{
+			// Light is initially looking down (i.e) from the light source.
+			DirectX::XMFLOAT3 directionalLightDirection{ 0.0f, -1.0f, 0.0f };
+			float padding{};
+			DirectX::XMFLOAT3 directionalLightColor{ 1.0f, 1.0f, 1.0f };
+			float padding2{};
+			DirectX::XMFLOAT3 cameraPosition{};
+			float padding3{};
+		};
+
+		SceneConstantBufferData mSceneConstantBufferData{};
+		std::unique_ptr<rendering::ConstantBuffer> mSceneConstantBuffer{};
+
+		rendering::ShaderReflection mShaderReflection{};
+	
 	};
 }

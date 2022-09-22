@@ -231,7 +231,7 @@ namespace nether::rendering
 		const CD3DX12_HEAP_PROPERTIES defaultHeapProperties(D3D12_HEAP_TYPE_DEFAULT);
 		CD3DX12_RESOURCE_DESC destinationResourceDesc = CD3DX12_RESOURCE_DESC::Buffer(bufferSize, D3D12_RESOURCE_FLAG_NONE);
 
-		utils::ThrowIfFailed(mDevice->CreateCommittedResource(&defaultHeapProperties, D3D12_HEAP_FLAG_NONE, &destinationResourceDesc, D3D12_RESOURCE_STATE_COPY_DEST, nullptr, IID_PPV_ARGS(&destinationResource)));
+		utils::ThrowIfFailed(mDevice->CreateCommittedResource(&defaultHeapProperties, D3D12_HEAP_FLAG_NONE, &destinationResourceDesc, D3D12_RESOURCE_STATE_COMMON, nullptr, IID_PPV_ARGS(&destinationResource)));
 
 		// Create intermediate resource (to copy data from CPU - GPU shared memory to GPU only memory).
 		Microsoft::WRL::ComPtr<ID3D12Resource> intermediateResource{};
@@ -288,7 +288,7 @@ namespace nether::rendering
 		const CD3DX12_HEAP_PROPERTIES defaultHeapProperties(D3D12_HEAP_TYPE_DEFAULT);
 		CD3DX12_RESOURCE_DESC destinationResourceDesc = CD3DX12_RESOURCE_DESC::Buffer(bufferSize, D3D12_RESOURCE_FLAG_NONE);
 
-		utils::ThrowIfFailed(mDevice->CreateCommittedResource(&defaultHeapProperties, D3D12_HEAP_FLAG_NONE, &destinationResourceDesc, D3D12_RESOURCE_STATE_COPY_DEST, nullptr, IID_PPV_ARGS(&destinationResource)));
+		utils::ThrowIfFailed(mDevice->CreateCommittedResource(&defaultHeapProperties, D3D12_HEAP_FLAG_NONE, &destinationResourceDesc, D3D12_RESOURCE_STATE_COMMON, nullptr, IID_PPV_ARGS(&destinationResource)));
 
 		// Create intermediate resource (to copy data from CPU - GPU shared memory to GPU only memory).
 		Microsoft::WRL::ComPtr<ID3D12Resource> intermediateResource{};
@@ -363,7 +363,7 @@ namespace nether::rendering
 
 		if (!textureLoader.mData)
 		{
-			utils::ErrorMessage(L"Cannot create index buffer with no data.");
+			utils::ErrorMessage(L"Cannot create texture with no data.");
 		}
 
 		// Create destination resource (on GPU only memory).

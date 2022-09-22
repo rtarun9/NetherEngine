@@ -81,8 +81,6 @@ namespace nether::loaders
 			{
 				LoadNode(childrenNodeIndex, model);
 			}
-
-			return;
 		}
 
 		const tinygltf::Mesh& nodeMesh = model->meshes[node.mesh];
@@ -191,7 +189,8 @@ namespace nether::loaders
 			}
 			else
 			{
-				mMaterials.emplace_back(Material{ mModelDirectory + L"../../Textures/Prototype.png" });
+				// note(rtarun9) : Not optimal. Will be replaced soon, once materials become more complex (and not just single albedo textures).
+				mMaterials.emplace_back(Material{});
 			}
 		};
 	}

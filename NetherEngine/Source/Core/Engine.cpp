@@ -24,6 +24,8 @@ namespace nether::core
 	
 	void Engine::Init(const HWND windowHandle, const Uint2& clientDimensions)
 	{
+		mWindowHandle = windowHandle;
+
 		FindAssetsDirectory();
 
 		mClientDimensions = clientDimensions;
@@ -41,6 +43,8 @@ namespace nether::core
 		IMGUI_CHECKVERSION();
 		ImGui::CreateContext();
 		ImGuiIO& io = ImGui::GetIO();
+		io.ConfigFlags |= ImGuiConfigFlags_DockingEnable;
+		io.ConfigFlags |= ImGuiConfigFlags_ViewportsEnable;
 
 		// Not really working for now.
 		/*
@@ -68,29 +72,6 @@ namespace nether::core
 	void Engine::Update(float deltaTime)
 	{
 		mCamera.Update(deltaTime);
-
-		const DirectX::XMVECTOR eyePosition = DirectX::XMVectorSet(0.0f, 0.0f, -10.0f, 1.0f);
-		const DirectX::XMVECTOR focusPosition = DirectX::XMVectorSet(0.0f, 0.0f, 0.0f, 1.0f);
-		const DirectX::XMVECTOR upDirection = DirectX::XMVectorSet(0.0f, 1.0f, 0.0f, 0.0f);
-
-		static float rotation = 0.0f;
-		rotation += 1.0f * deltaTime;
-
-		mMvpBuffer = 
-		{
-			.modelMatrix = DirectX::XMMatrixRotationZ(rotation) * DirectX::XMMatrixRotationX(rotation) * DirectX::XMMatrixRotationY(-rotation),
-			.viewProjectionMatrix = mCamera.GetViewMatrix() * DirectX::XMMatrixPerspectiveFovLH(DirectX::XMConvertToRadians(45.0f), mClientDimensions.x / (float)mClientDimensions.y, 0.1f, 1000.0f)
-		};
-
-		mCube->GetTransformConstantBuffer()->Update(&mMvpBuffer);
-
-		mMvpBuffer =
-		{
-			.modelMatrix = DirectX::XMMatrixScaling(0.1f, 0.1f, 0.1f),
-			.viewProjectionMatrix = mCamera.GetViewMatrix() * DirectX::XMMatrixPerspectiveFovLH(DirectX::XMConvertToRadians(45.0f), mClientDimensions.x / (float)mClientDimensions.y, 0.1f, 1000.0f)
-		};
-
-		mSponza->GetTransformConstantBuffer()->Update(&mMvpBuffer);
 	}
 
 	void Engine::Render()
@@ -102,9 +83,49 @@ namespace nether::core
 		ImGui_ImplWin32_NewFrame();
 		ImGui::NewFrame();
 
+		ImGui::DockSpaceOverViewport(ImGui::GetWindowViewport(), ImGuiDockNodeFlags_PassthruCentralNode);
+
 		ImGui::Begin("Camera Settings");
 		ImGui::SliderFloat("Movement Speed", &mCamera.mMovementSpeed, 0.1f, 1000.0f);
 		ImGui::SliderFloat("Rotation Speed", &mCamera.mRotationSpeed, 0.1f, 10.0f);
+		ImGui::End();
+
+		// Scene constant buffer data UI.
+		ImGui::Begin("Scene Buffer");
+		ImGui::ColorEdit3("Directional Light color", &mSceneConstantBufferData.directionalLightColor.x);
+		ImGui::SliderFloat3("Directional light direction", &mSceneConstantBufferData.directionalLightDirection.x, -5.0f, 5.0f);
+		ImGui::End();
+
+		// Update scene constant buffer.
+		mSceneConstantBuffer->Update(&mSceneConstantBufferData);
+
+		// Update transform components for all models.
+		ImGui::Begin("Game Objects");
+		for (const auto& [name, gameObject] : mGameObjects)
+		{
+			if (ImGui::TreeNode(utils::WStringToString(name).c_str()))
+			{
+				ImGui::SliderFloat3("Translation", &gameObject->GetTransformComponent().translate.x, -25.0f, 25.0f);
+				ImGui::SliderFloat3("Rotation", &gameObject->GetTransformComponent().rotate.x, 0.0f, 360.0f);
+				ImGui::SliderFloat3("Scale", &gameObject->GetTransformComponent().scale.x, 0.1f, 100.0f);
+				ImGui::TreePop();
+			}
+		
+			const DirectX::XMVECTOR scalingVector = DirectX::XMLoadFloat3(&gameObject->GetTransformComponent().scale);
+			const DirectX::XMVECTOR rotationVector = DirectX::XMLoadFloat3(&gameObject->GetTransformComponent().rotate);
+			const DirectX::XMVECTOR translationVector = DirectX::XMLoadFloat3(&gameObject->GetTransformComponent().translate);
+
+			const DirectX::XMMATRIX modelMatrix = DirectX::XMMatrixScalingFromVector(scalingVector) * DirectX::XMMatrixRotationRollPitchYawFromVector(rotationVector) * DirectX::XMMatrixTranslationFromVector(translationVector);			
+			
+			MVPBuffer mvpBuffer =
+			{
+				.modelMatrix = modelMatrix,
+				.inverseModelMatrix = DirectX::XMMatrixInverse(nullptr, modelMatrix),
+				.viewProjectionMatrix = mCamera.GetViewMatrix() * DirectX::XMMatrixPerspectiveFovLH(DirectX::XMConvertToRadians(45.0f), mClientDimensions.x / (float)mClientDimensions.y, 0.1f, 1000.0f)
+			};
+
+			gameObject->GetTransformConstantBuffer()->Update(&mvpBuffer);
+		}
 		ImGui::End();
 
 		ImGui::Render();
@@ -138,41 +159,36 @@ namespace nether::core
 		
 		commandList->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
 
-		const size_t cubeMeshesCount = mCube->mMeshCount;
-
-		for (size_t i : std::views::iota(0u, cubeMeshesCount))
+		for (const auto& [modelName, gameObject] : mGameObjects)
 		{
-			commandList->IASetVertexBuffers(0u, 1u, &mCube->mVertexBuffers[i].vertexBufferView);
-			commandList->IASetIndexBuffer(&mCube->mIndexBuffers[i].indexBufferView);
+			const size_t meshCount = gameObject->mMeshCount;
 
-			commandList->SetGraphicsRootConstantBufferView(0u, mCube->GetTransformConstantBuffer()->resource->GetGPUVirtualAddress());
-			commandList->SetGraphicsRootDescriptorTable(1u, mCube->mAlbedoTextures[mCube->mMaterialIndices[i]].gpuDescriptorHandle);
+			for (size_t i : std::views::iota(0u, meshCount))
+			{
+				commandList->IASetVertexBuffers(0u, 1u, &gameObject->mVertexBuffers[i].vertexBufferView);
+				commandList->IASetIndexBuffer(&gameObject->mIndexBuffers[i].indexBufferView);
 
-			commandList->DrawIndexedInstanced(mCube->mIndexBuffers[i].indicesCount, 1u, 0u, 0u, 0u);
-		}
+				commandList->SetGraphicsRootConstantBufferView(mShaderReflection.rootParameterBindingMap[L"mvpBuffer"], gameObject->GetTransformConstantBuffer()->resource->GetGPUVirtualAddress());
+				commandList->SetGraphicsRootConstantBufferView(mShaderReflection.rootParameterBindingMap[L"sceneBuffer"], mSceneConstantBuffer->resource->GetGPUVirtualAddress());
+				commandList->SetGraphicsRootDescriptorTable(mShaderReflection.rootParameterBindingMap[L"albedoTexture"], gameObject->mAlbedoTextures[gameObject->mMaterialIndices[i]].gpuDescriptorHandle);
 
-		const size_t sponzaMeshCount = mSponza->mMeshCount;
-
-		for (size_t i : std::views::iota(0u, sponzaMeshCount))
-		{
-			commandList->IASetVertexBuffers(0u, 1u, &mSponza->mVertexBuffers[i].vertexBufferView);
-			commandList->IASetIndexBuffer(&mSponza->mIndexBuffers[i].indexBufferView);
-
-			commandList->SetGraphicsRootConstantBufferView(0u, mSponza->GetTransformConstantBuffer()->resource->GetGPUVirtualAddress());
-
-			commandList->SetGraphicsRootDescriptorTable(1u, mSponza->mAlbedoTextures[mSponza->mMaterialIndices[i]].gpuDescriptorHandle);
-
-			commandList->DrawIndexedInstanced(mSponza->mIndexBuffers[i].indicesCount, 1u, 0u, 0u, 0u);
+				commandList->DrawIndexedInstanced(gameObject->mIndexBuffers[i].indicesCount, 1u, 0u, 0u, 0u);
+			}
 		}
 
 		ImGui_ImplDX12_RenderDrawData(ImGui::GetDrawData(), commandList.Get());
+		
+		ImGuiIO& io = ImGui::GetIO(); (void)io;
+		if (io.ConfigFlags & ImGuiConfigFlags_ViewportsEnable)
+		{
+			ImGui::UpdatePlatformWindows();
+			ImGui::RenderPlatformWindowsDefault(mWindowHandle, commandList.Get());
+		}
 
 		const CD3DX12_RESOURCE_BARRIER backBufferRenderTargetToPresent = CD3DX12_RESOURCE_BARRIER::Transition(backBuffer, D3D12_RESOURCE_STATE_RENDER_TARGET, D3D12_RESOURCE_STATE_PRESENT);
 		commandList->ResourceBarrier(1u, &backBufferRenderTargetToPresent);
 
-
 		mDevice->GetDirectCommandQueue()->ExecuteCommandLists(commandList, mDevice->GetCurrentSwapChainBackBufferIndex());
-
 
 		mDevice->Present();
 		mDevice->EndFrame();
@@ -240,11 +256,10 @@ namespace nether::core
 
 	void Engine::LoadContentAndAssets()
 	{
-		rendering::Shader vertexShader = rendering::ShaderCompiler::GetInstance().CompilerShader(rendering::ShaderType::Vertex, GetAssetPath(L"Shaders/HelloTriangleShader.hlsl"));
-		rendering::Shader pixelShader =  rendering::ShaderCompiler::GetInstance().CompilerShader(rendering::ShaderType::Pixel, GetAssetPath(L"Shaders/HelloTriangleShader.hlsl"));
+		const std::wstring baseShaderDirectory = GetAssetPath(L"Shaders/");
+		Microsoft::WRL::ComPtr<IDxcBlob> vertexShader = rendering::ShaderCompiler::GetInstance().CompilerShader(rendering::ShaderType::Vertex, GetAssetPath(L"Shaders/TestShader.hlsl"), baseShaderDirectory, mShaderReflection);
+		Microsoft::WRL::ComPtr<IDxcBlob> pixelShader =  rendering::ShaderCompiler::GetInstance().CompilerShader(rendering::ShaderType::Pixel, GetAssetPath(L"Shaders/TestShader.hlsl"), baseShaderDirectory, mShaderReflection);
 
-		vertexShader.shaderReflection.rootParameters.insert(vertexShader.shaderReflection.rootParameters.end(), pixelShader.shaderReflection.rootParameters.begin(), pixelShader.shaderReflection.rootParameters.end());
-		
 		// Create root signature.
 		// Get the highest supported root signature version.
 		D3D12_FEATURE_DATA_ROOT_SIGNATURE featureData
@@ -257,21 +272,24 @@ namespace nether::core
 			featureData.HighestVersion = D3D_ROOT_SIGNATURE_VERSION_1_1;
 		}
 
-		D3D12_STATIC_SAMPLER_DESC staticSampler
+		constexpr std::array<D3D12_STATIC_SAMPLER_DESC, 1> staticSamplers
 		{
-			.Filter = D3D12_FILTER_MIN_MAG_MIP_POINT,
-			.AddressU = D3D12_TEXTURE_ADDRESS_MODE_WRAP,
-			.AddressV = D3D12_TEXTURE_ADDRESS_MODE_WRAP,
-			.AddressW = D3D12_TEXTURE_ADDRESS_MODE_WRAP,
-			.MipLODBias = 0,
-			.MaxAnisotropy = 0,
-			.ComparisonFunc = D3D12_COMPARISON_FUNC_NEVER,
-			.BorderColor = D3D12_STATIC_BORDER_COLOR_TRANSPARENT_BLACK,
-			.MinLOD = 0.0f,
-			.MaxLOD = D3D12_FLOAT32_MAX,
-			.ShaderRegister = 0,
-			.RegisterSpace = 1,
-			.ShaderVisibility = D3D12_SHADER_VISIBILITY_PIXEL,
+			D3D12_STATIC_SAMPLER_DESC
+			{
+				.Filter = D3D12_FILTER_ANISOTROPIC,
+				.AddressU = D3D12_TEXTURE_ADDRESS_MODE_WRAP,
+				.AddressV = D3D12_TEXTURE_ADDRESS_MODE_WRAP,
+				.AddressW = D3D12_TEXTURE_ADDRESS_MODE_WRAP,
+				.MipLODBias = 0,
+				.MaxAnisotropy = D3D12_MAX_MAXANISOTROPY,
+				.ComparisonFunc = D3D12_COMPARISON_FUNC_NEVER,
+				.BorderColor = D3D12_STATIC_BORDER_COLOR_TRANSPARENT_BLACK,
+				.MinLOD = 0.0f,
+				.MaxLOD = D3D12_FLOAT32_MAX,
+				.ShaderRegister = 0,
+				.RegisterSpace = 0,
+				.ShaderVisibility = D3D12_SHADER_VISIBILITY_PIXEL,
+			}
 		};
 
 		const D3D12_VERSIONED_ROOT_SIGNATURE_DESC  rootSignatureDesc
@@ -279,10 +297,10 @@ namespace nether::core
 			.Version = featureData.HighestVersion,
 			.Desc_1_1
 			{
-				.NumParameters = static_cast<uint32_t>(vertexShader.shaderReflection.rootParameters.size()),
-				.pParameters = vertexShader.shaderReflection.rootParameters.data(),
-				.NumStaticSamplers = 1u,
-				.pStaticSamplers = &staticSampler,
+				.NumParameters = static_cast<uint32_t>(mShaderReflection.rootParameters.size()),
+				.pParameters = mShaderReflection.rootParameters.data(),
+				.NumStaticSamplers = static_cast<uint32_t>(staticSamplers.size()),
+				.pStaticSamplers = staticSamplers.data(),
 				.Flags = D3D12_ROOT_SIGNATURE_FLAG_ALLOW_INPUT_ASSEMBLER_INPUT_LAYOUT
 			}
 		};
@@ -297,7 +315,7 @@ namespace nether::core
 
 		utils::ThrowIfFailed(mDevice->GetDevice()->CreateRootSignature(0u, rootSignatureBlob->GetBufferPointer(), rootSignatureBlob->GetBufferSize(), IID_PPV_ARGS(&mHelloTriangleRootSignature)));
 
-		const std::vector<D3D12_INPUT_ELEMENT_DESC> inputElementDesc = ConstructInputElementDesc(vertexShader.shaderReflection.inputElementDescs);
+		const std::vector<D3D12_INPUT_ELEMENT_DESC> inputElementDesc = ConstructInputElementDesc(mShaderReflection.inputElementDescs);
 
 		// Create graphics pipeline state.
 		const D3D12_GRAPHICS_PIPELINE_STATE_DESC pipelineStateDesc
@@ -305,13 +323,13 @@ namespace nether::core
 			.pRootSignature = mHelloTriangleRootSignature.Get(),
 			.VS
 			{
-				.pShaderBytecode = vertexShader.shaderBlob->GetBufferPointer(),
-				.BytecodeLength = vertexShader.shaderBlob->GetBufferSize()
+				.pShaderBytecode = vertexShader->GetBufferPointer(),
+				.BytecodeLength = vertexShader->GetBufferSize()
             },
 			.PS
 			{
-				.pShaderBytecode = pixelShader.shaderBlob->GetBufferPointer(),
-				.BytecodeLength = pixelShader.shaderBlob->GetBufferSize()
+				.pShaderBytecode = pixelShader->GetBufferPointer(),
+				.BytecodeLength = pixelShader->GetBufferSize()
             },
 			.BlendState = CD3DX12_BLEND_DESC(D3D12_DEFAULT),
 			.SampleMask = UINT_MAX,
@@ -332,9 +350,37 @@ namespace nether::core
 
 		utils::ThrowIfFailed(mDevice->GetDevice()->CreateGraphicsPipelineState(&pipelineStateDesc, IID_PPV_ARGS(&mHelloTrianglePipelineState)));
 		
-		// Create Model.
-		mCube = std::make_unique<scene::GameObject>(mDevice.get(), GetAssetPath(L"Models/Cube/glTF/Cube.gltf"), L"Cube Model");
-		mSponza = std::make_unique<scene::GameObject>(mDevice.get(), GetAssetPath(L"Models/sponza-gltf-pbr/sponza.glb"), L"Sponza Model");
+		// Create Models.
+		mGameObjects[L"Floor"] = std::make_unique<scene::GameObject>(mDevice.get(), GetAssetPath(L"Models/Floor/glTF/Cube.gltf"), L"Floor Model");
+		mGameObjects[L"Floor"]->GetTransformComponent().scale = { 100.0f, 0.1f, 100.0f };
+		mGameObjects[L"Floor"]->GetTransformComponent().translate = { 0.0f, -10.1f, 0.0f };
+
+		mGameObjects[L"Cube"] = std::make_unique<scene::GameObject>(mDevice.get(), GetAssetPath(L"Models/Cube/glTF/Cube.gltf"), L"Cube Model");
+		mGameObjects[L"Cube"]->GetTransformComponent().translate.x += 2.0f;
+		mGameObjects[L"Cube"]->GetTransformComponent().rotate.y += 2.0f;
+		
+		mGameObjects[L"Cube1"] = std::make_unique<scene::GameObject>(mDevice.get(), GetAssetPath(L"Models/Cube/glTF/Cube.gltf"), L"Cube Model");
+		mGameObjects[L"Cube1"]->GetTransformComponent().translate.x += 7.0f;
+		mGameObjects[L"Cube1"]->GetTransformComponent().rotate.z += 7.0f;
+
+		mGameObjects[L"Cube2"] = std::make_unique<scene::GameObject>(mDevice.get(), GetAssetPath(L"Models/Cube/glTF/Cube.gltf"), L"Cube Model");
+		mGameObjects[L"Cube2"]->GetTransformComponent().translate.y += 2.2f;
+		mGameObjects[L"Cube2"]->GetTransformComponent().rotate.z += 2.2f;
+
+		mGameObjects[L"Cube3"] = std::make_unique<scene::GameObject>(mDevice.get(), GetAssetPath(L"Models/Cube/glTF/Cube.gltf"), L"Cube Model");
+		mGameObjects[L"Cube3"]->GetTransformComponent().translate.z += 7.0f;
+
+		mGameObjects[L"Cube4"] = std::make_unique<scene::GameObject>(mDevice.get(), GetAssetPath(L"Models/Cube/glTF/Cube.gltf"), L"Cube Model");
+		mGameObjects[L"Cube4"]->GetTransformComponent().translate.x -= 9.0f;
+		mGameObjects[L"Cube4"]->GetTransformComponent().rotate.y -= 9.0f;
+
+		// Create constant buffers.
+		rendering::ConstantBufferCreationDesc sceneConstantBufferCreationDesc
+		{
+			.bufferSize = sizeof(SceneConstantBufferData)
+		};
+
+		mSceneConstantBuffer = std::make_unique<rendering::ConstantBuffer>(mDevice->CreateConstantBuffer(sceneConstantBufferCreationDesc, L"Scene Constant Buffer Data"));
 
 		mDevice->GetDirectCommandQueue()->Flush(mDevice->GetCurrentSwapChainBackBufferIndex());
 	}

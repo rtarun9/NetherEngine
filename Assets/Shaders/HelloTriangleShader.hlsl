@@ -1,3 +1,5 @@
+#include "StaticSamplers.hlsli"
+
 struct VsInput
 {
     float3 position : POSITION;
@@ -28,12 +30,11 @@ VsOutput VsMain(VsInput input)
     return output;
 }
 
-SamplerState samplerState : register(s0, space1);
 Texture2D<float4> albedoTexture : register(t0, space1);
 
 float4 PsMain(VsOutput input) : SV_Target
 {
-    float3 color = albedoTexture.Sample(samplerState, input.textureCoords).xyz;
+    float3 color = albedoTexture.Sample(anisotropicSampler, input.textureCoords).xyz;
     float3 gammaCorrectedColor = pow(color, 1/2.2f);
     return float4(gammaCorrectedColor, 1.0f);
 }

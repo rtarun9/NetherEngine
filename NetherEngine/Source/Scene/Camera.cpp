@@ -8,6 +8,7 @@ namespace nether
 {
 	void Camera::Update(float deltaTime)
 	{
+		// Load the XMFLOATx to XMVECTOR's.
 		DirectX::XMVECTOR cameraPosition = DirectX::XMLoadFloat3(&mCameraPosition);
 		const DirectX::XMVECTOR cameraFront = DirectX::XMLoadFloat3(&mCameraFront);
 		const DirectX::XMVECTOR cameraRight = DirectX::XMLoadFloat3(&mCameraRight);
@@ -35,22 +36,24 @@ namespace nether
 
 		if (mKeys[utils::EnumClassValue(Keys::ArrowUp)])
 		{
-			mPitch -= mRotationSpeed * rotationSpeed;
+			mPitch -= rotationSpeed;
 		}
 		else if (mKeys[utils::EnumClassValue(Keys::ArrowDown)])
 		{
-			mPitch += mRotationSpeed * rotationSpeed;
+			mPitch += rotationSpeed;
 		}
 
 		if (mKeys[utils::EnumClassValue(Keys::ArrowLeft)])
 		{
-			mYaw -= mRotationSpeed * rotationSpeed;
+			mYaw -= rotationSpeed;
 		}
 		else if (mKeys[utils::EnumClassValue(Keys::ArrowRight)])
 		{
-			mYaw += mRotationSpeed * rotationSpeed;
+			mYaw += rotationSpeed;
 		}
 
+		// Store the position back into the member variable. 
+		// Pitch and yaw are directly modified, so no need to save the values into the member variables.
 		DirectX::XMStoreFloat3(&mCameraPosition, cameraPosition);
 	}
 
@@ -102,6 +105,8 @@ namespace nether
 
 	DirectX::XMMATRIX Camera::GetViewMatrix() 
 	{
+		// Load member variables into SIMD compatible XMVector's.
+
 		DirectX::XMVECTOR cameraPosition = DirectX::XMLoadFloat3(&mCameraPosition);
 		DirectX::XMVECTOR cameraFront = DirectX::XMLoadFloat3(&mCameraFront);
 		DirectX::XMVECTOR cameraUp = DirectX::XMLoadFloat3(&mCameraUp);
@@ -114,19 +119,18 @@ namespace nether
 
 		const DirectX::XMMATRIX rotationMatrix =  DirectX::XMMatrixRotationRollPitchYaw(mPitch, mYaw, 0.0f);
 
-		cameraTarget = DirectX::XMVector3TransformCoord(worldFront, rotationMatrix);
-		cameraTarget = DirectX::XMVector3Normalize(cameraTarget);
-
-		cameraRight = DirectX::XMVector3TransformCoord(worldRight, rotationMatrix);
-		cameraRight = DirectX::XMVector3Normalize(cameraRight);
-
-		cameraFront = DirectX::XMVector3TransformCoord(worldFront, rotationMatrix);
-		cameraFront = DirectX::XMVector3Normalize(cameraFront);
+		// Compute the basis vectors for the look at matrix.
+		cameraTarget = DirectX::XMVector3Normalize(DirectX::XMVector3TransformCoord(worldFront, rotationMatrix));
+		cameraRight = DirectX::XMVector3Normalize(DirectX::XMVector3TransformCoord(worldRight, rotationMatrix));
+		cameraFront = DirectX::XMVector3Normalize(DirectX::XMVector3TransformCoord(worldFront, rotationMatrix));
 
 		cameraUp = DirectX::XMVector3Cross(cameraFront, cameraRight);
 
+		// Some clarification why vector subtraction is not used here : cameraPosition is a point, and not a vector while camera target is a vector.
+		// Basically finding the vector centered (vector's arent centered but for visualization assume the base of vector is at cameraPosition), and looking / going towards the camera position.
 		cameraTarget = cameraPosition + cameraTarget;
 
+		// Store the XMVECTOR's back to XMFlOATX's.
 		DirectX::XMStoreFloat3(&mCameraFront, cameraFront);
 		DirectX::XMStoreFloat3(&mCameraUp, cameraUp);
 		DirectX::XMStoreFloat3(&mCameraRight, cameraRight);

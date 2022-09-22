@@ -20,6 +20,7 @@ constexpr bool NETHER_DEBUG_BUILD = false;
 #include <queue>
 #include <array>
 #include <chrono>
+#include <unordered_map>
 
 // Use UNICODE variants of Win32 function's by default.
 #ifndef UNICODE
