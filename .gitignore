@@ -1,4 +1,12 @@
-# Output directory
-out/
-Bin/
+# VS Files.
+*.sln
+*.vcxproj
+*.user
+*.filters
+
+# Output directories.
 .vs/
+bin/
+obj/
+Output/
+Output-Int/
