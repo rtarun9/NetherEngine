@@ -10,8 +10,8 @@ project "NetherEngine"
     language "C++"
     cppdialect "C++20"
 
-    objdir "Output/%{cfg.buildcfg}"
-    targetdir "Output-Int/%{cfg.buildcfg}"
+    objdir "Output-Int/%{cfg.buildcfg}"
+    targetdir "Output/%{cfg.buildcfg}"
 
     files
     {
@@ -24,6 +24,17 @@ project "NetherEngine"
         "NetherEngine/" 
     }
 
+    links
+    {
+        "d3d12.lib",
+        "dxgi.lib",
+        "dxguid.lib",
+        "dxcompiler.lib"
+    }
+
+    pchheader "Pch.hpp"
+    pchsource "NetherEngine/Pch.cpp"
+
     filter "configurations:Debug"
         defines "NETHER_DEBUG"
         symbols "On"
@@ -32,6 +43,3 @@ project "NetherEngine"
     filter "configurations:Release"
         defines "NETHER_RELEASE"
         optimize "Speed"
-
-    pchheader "Pch.hpp"
-    pchsource "NetherEngine/Pch.cpp"

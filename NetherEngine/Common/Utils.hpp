@@ -64,6 +64,22 @@ namespace nether
 		}
 	}
 
+	inline void SetName(ID3D12Object* const object, const std::wstring_view name)
+	{
+		if constexpr (NETHER_DEBUG_BUILD)
+		{
+			ThrowIfFailed(object->SetName(name.data()));
+		}
+	}
+
+	inline void DebugLogMessage(const std::wstring_view message)
+	{
+		if constexpr (NETHER_DEBUG_BUILD)
+		{
+			std::wcout << "Debug : " << message.data() << '\n';
+		}
+	}
+
 	template <typename T>
 	static inline constexpr typename std::underlying_type<T>::type EnumClassValue(const T& value)
 	{

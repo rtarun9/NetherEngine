@@ -13,6 +13,7 @@ constexpr bool NETHER_DEBUG_BUILD = false;
 #include <algorithm>
 #include <string_view>
 #include <memory>
+#include <iostream>
 #include <exception>
 #include <stdexcept>
 #include <ranges>
@@ -40,6 +41,9 @@ constexpr bool NETHER_DEBUG_BUILD = false;
 
 // DXC API includes.
 #include <dxcapi.h>
+
+// D3D12 helper library.
+#include <Core/d3dx12.hpp>
 
 // Helper common includes.
 #include "Common/Common.hpp"
