@@ -2,13 +2,10 @@
 
 #include "Engine.hpp"
 
+#include "Graphics/Shader.hpp"
+
 namespace nether::core
 {
-	Engine::Engine()
-	{
-		FindAssetsDirectory();
-	}
-
 	Engine::~Engine()
 	{
 		Destroy();
@@ -16,6 +13,8 @@ namespace nether::core
 	
 	void Engine::Init(const HWND windowHandle, const Uint2& clientDimensions)
 	{
+		FindAssetsDirectory();
+
 		mWindowHandle = windowHandle;
 
 		mClientDimensions = clientDimensions;
@@ -37,14 +36,14 @@ namespace nether::core
 		ThrowIfFailed(mGraphicsCommandList->Reset(mDirectCommandAllocator.Get(), nullptr));
 
 		// Clear RTV and DSV.
-		CD3DX12_CPU_DESCRIPTOR_HANDLE rtvHandle(mRTVDescriptorHeap->GetCPUDescriptorHandleForHeapStart(), mCurrentBackBufferIndex, mRTVDescriptorSize);
-		CD3DX12_CPU_DESCRIPTOR_HANDLE dsvHandle(mDSVDescriptorHeap->GetCPUDescriptorHandleForHeapStart());
+		const D3D12_CPU_DESCRIPTOR_HANDLE rtvHandle = mRtvDescriptorHeap.GetDescriptorHandleFromIndex(mCurrentBackBufferIndex).cpuDescriptorHandle;
+		const D3D12_CPU_DESCRIPTOR_HANDLE dsvHandle = mDsvDescriptorHeap.GetDescriptorHandleFromIndex(0u).cpuDescriptorHandle;
 
 		// Transition back buffer from state present to state render target.
 		CD3DX12_RESOURCE_BARRIER backBufferPresentToRT = CD3DX12_RESOURCE_BARRIER::Transition(mSwapChainBackBuffers[mCurrentBackBufferIndex].Get(), D3D12_RESOURCE_STATE_PRESENT, D3D12_RESOURCE_STATE_RENDER_TARGET);
 		mGraphicsCommandList->ResourceBarrier(1u, &backBufferPresentToRT);
 
-		static const std::array<float, 4> clearColor{ 0.1f, 0.1f, 0.1f, 1.0f };
+		static const std::array<float, 4> clearColor{0.1f, 0.1f, 0.1f, 1.0f};
 		mGraphicsCommandList->ClearRenderTargetView(rtvHandle, clearColor.data(), 0u, nullptr);
 		mGraphicsCommandList->ClearDepthStencilView(dsvHandle, D3D12_CLEAR_FLAG_DEPTH, 1.0f, 1u, 0u, nullptr);
 
@@ -68,6 +67,7 @@ namespace nether::core
 		FlushCommandQueue();
 
 		mCurrentBackBufferIndex = mSwapChain->GetCurrentBackBufferIndex();
+		mFrameNumber++;
 	}
 
 	void Engine::Destroy()
@@ -177,6 +177,17 @@ namespace nether::core
 		ThrowIfFailed(::D3D12CreateDevice(mAdapter.Get(), D3D_FEATURE_LEVEL_12_0, IID_PPV_ARGS(&mDevice)));
 		SetName(mDevice.Get(), L"D3D12 Device");
 
+		// Create info queue in debug build to set brake point on error's, warning and corruption messages.
+		if constexpr (NETHER_DEBUG_BUILD)
+		{
+			Microsoft::WRL::ComPtr<ID3D12InfoQueue1> infoQueue{};
+			ThrowIfFailed(mDevice.As(&infoQueue));
+
+			infoQueue->SetBreakOnSeverity(D3D12_MESSAGE_SEVERITY_CORRUPTION, TRUE);
+			infoQueue->SetBreakOnSeverity(D3D12_MESSAGE_SEVERITY_ERROR, TRUE);
+			infoQueue->SetBreakOnSeverity(D3D12_MESSAGE_SEVERITY_WARNING, TRUE);
+		}
+
 		// Create Direct command queue.
 		const D3D12_COMMAND_QUEUE_DESC directCommandQueueDesc
 		{
@@ -210,32 +221,9 @@ namespace nether::core
 		ThrowIfFailed(swapChain.As(&mSwapChain));
 		mCurrentBackBufferIndex = mSwapChain->GetCurrentBackBufferIndex();
 
-		// Create descriptor heap and get descriptor size.
-		const D3D12_DESCRIPTOR_HEAP_DESC rtvDescriptorHeapDesc
-		{
-			.Type = D3D12_DESCRIPTOR_HEAP_TYPE_RTV,
-			.NumDescriptors = BACK_BUFFER_COUNT,
-			.Flags = D3D12_DESCRIPTOR_HEAP_FLAG_NONE,
-			.NodeMask = 0u
-		};
-
-		ThrowIfFailed(mDevice->CreateDescriptorHeap(&rtvDescriptorHeapDesc, IID_PPV_ARGS(&mRTVDescriptorHeap)));
-		SetName(mRTVDescriptorHeap.Get(), L"RTV Descriptor Heap");
-
-		mRTVDescriptorSize = mDevice->GetDescriptorHandleIncrementSize(D3D12_DESCRIPTOR_HEAP_TYPE_RTV);
-
-		const D3D12_DESCRIPTOR_HEAP_DESC dsvDescriptorHeapDesc
-		{
-			.Type = D3D12_DESCRIPTOR_HEAP_TYPE_DSV,
-			.NumDescriptors = 1u,
-			.Flags = D3D12_DESCRIPTOR_HEAP_FLAG_NONE,
-			.NodeMask = 0u
-		};
-
-		ThrowIfFailed(mDevice->CreateDescriptorHeap(&dsvDescriptorHeapDesc, IID_PPV_ARGS(&mDSVDescriptorHeap)));
-		SetName(mDSVDescriptorHeap.Get(), L"DSV Descriptor Heap");
-
-		mDSVDescriptorSize = mDevice->GetDescriptorHandleIncrementSize(D3D12_DESCRIPTOR_HEAP_TYPE_DSV);
+		// Create descriptor heaps.
+		mRtvDescriptorHeap.Init(mDevice.Get(), D3D12_DESCRIPTOR_HEAP_TYPE_RTV, BACK_BUFFER_COUNT, L"RTV Descriptor Heap");
+		mDsvDescriptorHeap.Init(mDevice.Get(), D3D12_DESCRIPTOR_HEAP_TYPE_DSV, 1u, L"DSV Descriptor Heap");
 
 		// Create render targets.
 		CreateRenderTargets();
@@ -292,8 +280,10 @@ namespace nether::core
 			}
 		};
 
-		const CD3DX12_CPU_DESCRIPTOR_HANDLE dsvHandle{ mDSVDescriptorHeap->GetCPUDescriptorHandleForHeapStart() };
+		const CD3DX12_CPU_DESCRIPTOR_HANDLE dsvHandle{ mDsvDescriptorHeap.GetDescriptorHandleForHeapStart().cpuDescriptorHandle};
 		mDevice->CreateDepthStencilView(mDepthStencilBuffer.Get(), &dsvDesc, dsvHandle);
+
+		ThrowIfFailed(mGraphicsCommandList->Reset(mDirectCommandAllocator.Get(), nullptr));
 
 		// Change state of DSV from common to depth write.
 		CD3DX12_RESOURCE_BARRIER dsvFromCommonToDepthWrite = CD3DX12_RESOURCE_BARRIER::Transition(mDepthStencilBuffer.Get(), D3D12_RESOURCE_STATE_COMMON, D3D12_RESOURCE_STATE_DEPTH_WRITE);
@@ -318,12 +308,16 @@ namespace nether::core
 			.bottom = static_cast<long>(mClientDimensions.y)
 		};
 
+		ThrowIfFailed(mGraphicsCommandList->Close());
 		ExecuteCommandList();
 		FlushCommandQueue();
 	}
 
 	void Engine::LoadContentAndAssets()
 	{
+		graphics::ShaderReflection shaderReflection{};
+		graphics::Shader vertexShader = graphics::ShaderCompiler::GetInstance().CompilerShader(graphics::ShaderType::Vertex, shaderReflection, GetAssetPath(L"Shaders/HelloTriangle.hlsl"));
+		graphics::Shader pixelShader = graphics::ShaderCompiler::GetInstance().CompilerShader(graphics::ShaderType::Pixel, shaderReflection, GetAssetPath(L"Shaders/HelloTriangle.hlsl"));
 	}
 
 	void Engine::ExecuteCommandList()
@@ -351,7 +345,12 @@ namespace nether::core
 				ErrorMessage(L"Failed to create fence event");
 			}
 
+			// Specify that the fence event will be fired when the fence reaches the specified value.
 			ThrowIfFailed(mFence->SetEventOnCompletion(mFrameFenceValues[mCurrentBackBufferIndex], fenceEvent));
+			
+			// Wait until that event has been triggered.
+
+			assert(fenceEvent && "Fence Event is NULL");
 			::WaitForSingleObject(fenceEvent, INFINITE);
 			CloseHandle(fenceEvent);
 		}
@@ -359,7 +358,7 @@ namespace nether::core
 
 	void Engine::CreateRenderTargets()
 	{
-		CD3DX12_CPU_DESCRIPTOR_HANDLE rtvHandle(mRTVDescriptorHeap->GetCPUDescriptorHandleForHeapStart());
+		CD3DX12_CPU_DESCRIPTOR_HANDLE rtvHandle(mRtvDescriptorHeap.GetDescriptorHandleForHeapStart().cpuDescriptorHandle);
 
 		for (uint32_t backBufferIndex : std::views::iota(0u, BACK_BUFFER_COUNT))
 		{
@@ -367,7 +366,7 @@ namespace nether::core
 
 			mDevice->CreateRenderTargetView(mSwapChainBackBuffers[backBufferIndex].Get(), nullptr, rtvHandle);
 			SetName(mSwapChainBackBuffers[backBufferIndex].Get(), L"SwapChain Back Buffer");
-			rtvHandle.Offset(mRTVDescriptorSize);
+			rtvHandle.Offset(mRtvDescriptorHeap.GetDescriptorHandleSize());
 		}
 	}
 }

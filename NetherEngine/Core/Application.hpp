@@ -1,7 +1,5 @@
 #pragma once
 
-#include "Pch.hpp"
-
 namespace nether::core
 {
 	// Forward declaration's.
@@ -13,6 +11,15 @@ namespace nether::core
 	{
 	public:
 		int Run(Engine* const engine, const std::wstring_view windowTitle);
+
+		Application() = default;
+		~Application() = default;
+		
+		Application(const Application& other) = delete;
+		Application& operator=(const Application& other) = delete;
+		
+		Application(Application&& other) = delete;
+		Application& operator=(Application&& other) = delete;
 
 	private:
 		static LRESULT CALLBACK WindowProc(HWND windowHandle, UINT message, WPARAM wParam, LPARAM lParam);

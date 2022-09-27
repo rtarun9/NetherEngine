@@ -77,7 +77,8 @@ namespace nether::core
             while (message.message != WM_QUIT)
             {
                 mCurrentFrameTime = mClock.now();
-                const float deltaTime = static_cast<float>((mCurrentFrameTime - mPreviousFrameTime).count() * 1e-9);
+                const double deltaTime = std::chrono::duration_cast<std::chrono::nanoseconds>(mCurrentFrameTime - mPreviousFrameTime).count() * 1e-9;
+
                 mPreviousFrameTime = mCurrentFrameTime;
 
                 if (::PeekMessageW(&message, nullptr, 0u, 0u, PM_REMOVE))
@@ -86,7 +87,7 @@ namespace nether::core
                     ::DispatchMessageW(&message);
                 }
 
-                engine->Update(deltaTime);
+                engine->Update(static_cast<float>(deltaTime));
                 engine->Render();
             }
 
@@ -123,7 +124,7 @@ namespace nether::core
 
             if (engine)
             {
-                engine->OnKeyAction(wParam, true);
+                engine->OnKeyAction(static_cast<uint8_t>(wParam), true);
             }
 
             return 0;
@@ -133,7 +134,7 @@ namespace nether::core
         {
             if (engine)
             {
-                engine->OnKeyAction(wParam, false);
+                engine->OnKeyAction(static_cast<uint8_t>(wParam), false);
             }
 
             return 0;

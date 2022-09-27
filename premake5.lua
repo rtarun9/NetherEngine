@@ -4,6 +4,12 @@ workspace "NetherEngine"
         "Debug",
         "Release"
     }
+    architecture "x64"
+
+function IncludeAndLinkThirdParty()
+    includedirs "ThirdParty/DirectXShaderCompiler/inc/"
+    libdirs "ThirdParty/DirectXShaderCompiler/bin/x64/"
+end
 
 project "NetherEngine"
     kind "ConsoleApp"
@@ -21,19 +27,23 @@ project "NetherEngine"
 
     includedirs 
     { 
-        "NetherEngine/" 
+        "NetherEngine/",
     }
 
     links
     {
-        "d3d12.lib",
-        "dxgi.lib",
-        "dxguid.lib",
-        "dxcompiler.lib"
+        "d3d12",
+        "dxgi",
+        "dxguid",
+        "dxcompiler",
     }
+
+    IncludeAndLinkThirdParty()
 
     pchheader "Pch.hpp"
     pchsource "NetherEngine/Pch.cpp"
+
+    staticruntime "Off"
 
     filter "configurations:Debug"
         defines "NETHER_DEBUG"

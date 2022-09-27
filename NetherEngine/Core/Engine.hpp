@@ -1,6 +1,6 @@
 #pragma once
 
-#include "Pch.hpp"
+#include "Graphics/DescriptorHeap.hpp"
 
 namespace nether::core
 {
@@ -8,8 +8,14 @@ namespace nether::core
 	class Engine
 	{
 	public:
-		Engine();
+		Engine() = default;
 		~Engine();
+
+		Engine(const Engine& other) = delete;
+		Engine& operator=(const Engine& other) = delete;
+
+		Engine(Engine&& other) = delete;
+		Engine& operator=(Engine&& other) = delete;
 
 		void Init(const HWND windowHandle, const Uint2& clientDimensions);
 		void Update(const float deltaTime);
@@ -47,6 +53,8 @@ namespace nether::core
 		Uint2 mClientDimensions{};
 		float mAspectRatio{1.0f};
 
+		uint64_t mFrameNumber{};
+
 		std::wstring mAssetsDirectoryPath{};
 		std::wstring mRootDirectoryPath{};
 
@@ -63,11 +71,8 @@ namespace nether::core
 		Microsoft::WRL::ComPtr<IDXGISwapChain4> mSwapChain{};
 		std::array<Microsoft::WRL::ComPtr<ID3D12Resource>, BACK_BUFFER_COUNT> mSwapChainBackBuffers{};
 
-		Microsoft::WRL::ComPtr<ID3D12DescriptorHeap> mRTVDescriptorHeap{};
-		uint32_t mRTVDescriptorSize{};
-
-		Microsoft::WRL::ComPtr<ID3D12DescriptorHeap> mDSVDescriptorHeap{};
-		uint32_t mDSVDescriptorSize{};
+		graphics::DescriptorHeap mRtvDescriptorHeap{};
+		graphics::DescriptorHeap mDsvDescriptorHeap{};
 
 		Microsoft::WRL::ComPtr<ID3D12CommandAllocator> mDirectCommandAllocator{};
 		Microsoft::WRL::ComPtr<ID3D12GraphicsCommandList3> mGraphicsCommandList{};
