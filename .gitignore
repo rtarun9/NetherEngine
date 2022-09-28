@@ -10,3 +10,7 @@ bin/
 obj/
 Output/
 Output-Int/
+
+# Nuget package dir.
+packages/
+packages.config

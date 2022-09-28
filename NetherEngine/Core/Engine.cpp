@@ -32,8 +32,9 @@ namespace nether::core
 	void Engine::Render()
 	{
 		// Reset command allocator and list.
-		ThrowIfFailed(mDirectCommandAllocator->Reset());
-		ThrowIfFailed(mGraphicsCommandList->Reset(mDirectCommandAllocator.Get(), nullptr));
+		ThrowIfFailed(mDirectCommandQueue.GetCommandAllocator(mCurrentBackBufferIndex)->Reset());
+
+		Microsoft::WRL::ComPtr<ID3D12GraphicsCommandList2> commandList = mDirectCommandQueue.GetCommandList(mCurrentBackBufferIndex);
 
 		// Clear RTV and DSV.
 		const D3D12_CPU_DESCRIPTOR_HANDLE rtvHandle = mRtvDescriptorHeap.GetDescriptorHandleFromIndex(mCurrentBackBufferIndex).cpuDescriptorHandle;
@@ -41,38 +42,70 @@ namespace nether::core
 
 		// Transition back buffer from state present to state render target.
 		CD3DX12_RESOURCE_BARRIER backBufferPresentToRT = CD3DX12_RESOURCE_BARRIER::Transition(mSwapChainBackBuffers[mCurrentBackBufferIndex].Get(), D3D12_RESOURCE_STATE_PRESENT, D3D12_RESOURCE_STATE_RENDER_TARGET);
-		mGraphicsCommandList->ResourceBarrier(1u, &backBufferPresentToRT);
+		commandList->ResourceBarrier(1u, &backBufferPresentToRT);
 
 		static const std::array<float, 4> clearColor{0.1f, 0.1f, 0.1f, 1.0f};
-		mGraphicsCommandList->ClearRenderTargetView(rtvHandle, clearColor.data(), 0u, nullptr);
-		mGraphicsCommandList->ClearDepthStencilView(dsvHandle, D3D12_CLEAR_FLAG_DEPTH, 1.0f, 1u, 0u, nullptr);
+		commandList->ClearRenderTargetView(rtvHandle, clearColor.data(), 0u, nullptr);
+		commandList->ClearDepthStencilView(dsvHandle, D3D12_CLEAR_FLAG_DEPTH, 1.0f, 1u, 0u, nullptr);
+
+		// Set root signature, pso and render resources.
+		commandList->SetGraphicsRootSignature(mRootSignature.Get());
+		commandList->SetPipelineState(mPso.Get());
+		struct RenderResources
+		{
+			uint32_t positionBufferIndex;
+			uint32_t colorBufferIndex;
+		};
+
+		RenderResources renderResources =
+		{
+			.positionBufferIndex = mVertexPositionBuffer.srvIndex,
+			.colorBufferIndex = mVertexColorBuffer.srvIndex,
+		};
+
+
+		const D3D12_INDEX_BUFFER_VIEW indexBufferView
+		{
+			.BufferLocation = mIndexBuffer.resource->GetGPUVirtualAddress(),
+			.SizeInBytes = sizeof(uint32_t) * 3u,
+			.Format = DXGI_FORMAT_R32_UINT,
+		};
+
+		commandList->IASetIndexBuffer(&indexBufferView);
+
+		std::array<ID3D12DescriptorHeap* const, 1u> descriptorHeaps{ mCbvSrvUavDescriptorHeap.GetDescriptorHeap() };
+		commandList->SetDescriptorHeaps(1u, { descriptorHeaps.data()});
 
 		// Set viewport and render targets.
-		mGraphicsCommandList->RSSetViewports(1u, &mViewport);
-		mGraphicsCommandList->RSSetScissorRects(1u, &mScissorRect);
-		mGraphicsCommandList->OMSetRenderTargets(1u, &rtvHandle, FALSE, &dsvHandle);
+		commandList->RSSetViewports(1u, &mViewport);
+		commandList->RSSetScissorRects(1u, &mScissorRect);
+
+		commandList->OMSetRenderTargets(1u, &rtvHandle, FALSE, &dsvHandle);
+		commandList->IASetPrimitiveTopology(D3D12_PRIMITIVE_TOPOLOGY::D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
+		commandList->SetGraphicsRoot32BitConstants(0u, 2u, &renderResources, 0u);
+		commandList->DrawInstanced(3u, 1u, 0u, 0u);
 
 		// Transition back buffer from render target to present.
 		CD3DX12_RESOURCE_BARRIER backBufferRTToPresent = CD3DX12_RESOURCE_BARRIER::Transition(mSwapChainBackBuffers[mCurrentBackBufferIndex].Get(), D3D12_RESOURCE_STATE_RENDER_TARGET, D3D12_RESOURCE_STATE_PRESENT);
-		mGraphicsCommandList->ResourceBarrier(1u, &backBufferRTToPresent);
+		commandList->ResourceBarrier(1u, &backBufferRTToPresent);
 
-		ThrowIfFailed(mGraphicsCommandList->Close());
-		ExecuteCommandList();
+		mDirectCommandQueue.ExecuteCommandLists(std::move(commandList), mCurrentBackBufferIndex);
 
 		const uint32_t syncInterval = mVsyncEnabled ? 1u : 0u;
 		const uint32_t presentFlags = mIsTearingSupported && !mVsyncEnabled ? DXGI_PRESENT_ALLOW_TEARING : 0u;
 
 		mSwapChain->Present(syncInterval, presentFlags);
 
-		FlushCommandQueue();
-
+		mDirectCommandQueue.Flush(mCurrentBackBufferIndex);
 		mCurrentBackBufferIndex = mSwapChain->GetCurrentBackBufferIndex();
+
 		mFrameNumber++;
 	}
 
 	void Engine::Destroy()
 	{
-		FlushCommandQueue();
+		mCopyCommandQueue.Flush(mCurrentBackBufferIndex);
+		mDirectCommandQueue.Flush(mCurrentBackBufferIndex);
 	}
 
 	void Engine::Resize(const Uint2& clientDimensions)
@@ -189,16 +222,8 @@ namespace nether::core
 		}
 
 		// Create Direct command queue.
-		const D3D12_COMMAND_QUEUE_DESC directCommandQueueDesc
-		{
-			.Type = D3D12_COMMAND_LIST_TYPE_DIRECT,
-			.Priority = D3D12_COMMAND_QUEUE_PRIORITY_NORMAL,
-			.Flags = D3D12_COMMAND_QUEUE_FLAG_NONE,
-			.NodeMask = 0u
-		};
-
-		ThrowIfFailed(mDevice->CreateCommandQueue(&directCommandQueueDesc, IID_PPV_ARGS(&mDirectCommandQueue)));
-		SetName(mDirectCommandQueue.Get(), L"Direct Command Queue");
+		mDirectCommandQueue.Init(mDevice.Get(), D3D12_COMMAND_LIST_TYPE_DIRECT, L"Direct Command Queue");
+		mCopyCommandQueue.Init(mDevice.Get(), D3D12_COMMAND_LIST_TYPE_COPY, L"Copy Command Queue");
 
 		// Create swapchain.
 		const DXGI_SWAP_CHAIN_DESC1 swapChainDesc
@@ -217,28 +242,17 @@ namespace nether::core
 		};
 
 		Microsoft::WRL::ComPtr<IDXGISwapChain1> swapChain{};
-		ThrowIfFailed(mFactory->CreateSwapChainForHwnd(mDirectCommandQueue.Get(), mWindowHandle, &swapChainDesc, nullptr, nullptr, &swapChain));
+		ThrowIfFailed(mFactory->CreateSwapChainForHwnd(mDirectCommandQueue.GetCommandQueue(), mWindowHandle, &swapChainDesc, nullptr, nullptr, &swapChain));
 		ThrowIfFailed(swapChain.As(&mSwapChain));
 		mCurrentBackBufferIndex = mSwapChain->GetCurrentBackBufferIndex();
 
 		// Create descriptor heaps.
 		mRtvDescriptorHeap.Init(mDevice.Get(), D3D12_DESCRIPTOR_HEAP_TYPE_RTV, BACK_BUFFER_COUNT, L"RTV Descriptor Heap");
 		mDsvDescriptorHeap.Init(mDevice.Get(), D3D12_DESCRIPTOR_HEAP_TYPE_DSV, 1u, L"DSV Descriptor Heap");
+		mCbvSrvUavDescriptorHeap.Init(mDevice.Get(), D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV, 100u, L"CBV SRV UAV Descriptor Heap");
 
 		// Create render targets.
 		CreateRenderTargets();
-
-		// Create command allocator and command list.
-		ThrowIfFailed(mDevice->CreateCommandAllocator(D3D12_COMMAND_LIST_TYPE_DIRECT, IID_PPV_ARGS(&mDirectCommandAllocator)));
-		SetName(mDirectCommandAllocator.Get(), L"Direct Command Allocator");
-
-		ThrowIfFailed(mDevice->CreateCommandList(0u, D3D12_COMMAND_LIST_TYPE_DIRECT, mDirectCommandAllocator.Get(), nullptr, IID_PPV_ARGS(&mGraphicsCommandList)));
-		SetName(mGraphicsCommandList.Get(), L"Graphics Command List");
-		ThrowIfFailed(mGraphicsCommandList->Close());
-
-		// Create fence object.
-		ThrowIfFailed(mDevice->CreateFence(0u, D3D12_FENCE_FLAG_NONE, IID_PPV_ARGS(&mFence)));
-		SetName(mFence.Get(), L"Fence");
 
 		// Create depth stencil buffer.
 		const D3D12_RESOURCE_DESC depthStencilBufferResourceDesc
@@ -255,9 +269,9 @@ namespace nether::core
 			.Flags = D3D12_RESOURCE_FLAG_ALLOW_DEPTH_STENCIL
 		};
 
-		CD3DX12_HEAP_PROPERTIES defaultHeapProperties(D3D12_HEAP_TYPE_DEFAULT);
+		const CD3DX12_HEAP_PROPERTIES defaultHeapProperties(D3D12_HEAP_TYPE_DEFAULT);
 
-		D3D12_CLEAR_VALUE optimizedClearValue
+		const D3D12_CLEAR_VALUE optimizedClearValue
 		{
 			.Format = DXGI_FORMAT_D32_FLOAT,
 			.DepthStencil =
@@ -283,11 +297,14 @@ namespace nether::core
 		const CD3DX12_CPU_DESCRIPTOR_HANDLE dsvHandle{ mDsvDescriptorHeap.GetDescriptorHandleForHeapStart().cpuDescriptorHandle};
 		mDevice->CreateDepthStencilView(mDepthStencilBuffer.Get(), &dsvDesc, dsvHandle);
 
-		ThrowIfFailed(mGraphicsCommandList->Reset(mDirectCommandAllocator.Get(), nullptr));
-
 		// Change state of DSV from common to depth write.
-		CD3DX12_RESOURCE_BARRIER dsvFromCommonToDepthWrite = CD3DX12_RESOURCE_BARRIER::Transition(mDepthStencilBuffer.Get(), D3D12_RESOURCE_STATE_COMMON, D3D12_RESOURCE_STATE_DEPTH_WRITE);
-		mGraphicsCommandList->ResourceBarrier(1u, &dsvFromCommonToDepthWrite);
+		const CD3DX12_RESOURCE_BARRIER dsvFromCommonToDepthWrite = CD3DX12_RESOURCE_BARRIER::Transition(mDepthStencilBuffer.Get(), D3D12_RESOURCE_STATE_COMMON, D3D12_RESOURCE_STATE_DEPTH_WRITE);
+		
+		auto commandList = mDirectCommandQueue.GetCommandList(mCurrentBackBufferIndex);
+
+		commandList->ResourceBarrier(1u, &dsvFromCommonToDepthWrite);
+		mDirectCommandQueue.ExecuteCommandLists(std::move(commandList), mCurrentBackBufferIndex);
+		mDirectCommandQueue.Flush(mCurrentBackBufferIndex);
 
 		// Setup viewport and scissor rect.
 		mViewport =
@@ -307,53 +324,178 @@ namespace nether::core
 			.right = static_cast<long>(mClientDimensions.x),
 			.bottom = static_cast<long>(mClientDimensions.y)
 		};
-
-		ThrowIfFailed(mGraphicsCommandList->Close());
-		ExecuteCommandList();
-		FlushCommandQueue();
 	}
 
 	void Engine::LoadContentAndAssets()
 	{
+		const std::array<DirectX::XMFLOAT3, 3> vertexPositions
+		{
+			DirectX::XMFLOAT3{0.5f, -0.5f, 0.0f},
+			DirectX::XMFLOAT3{-0.5f, -0.5f, 0.0f},
+			DirectX::XMFLOAT3{0.0f, 0.5f, 0.0f},
+		};
+
+		const graphics::BufferCreationDesc vertexPositionsBufferCreationDesc
+		{
+			.usage = graphics::BufferUsage::StructuredBuffer,
+			.format = DXGI_FORMAT_R32G32B32_FLOAT,
+			.componentCount = 3u,
+			.stride = sizeof(DirectX::XMFLOAT3)
+		};
+
+		mVertexPositionBuffer = CreateBuffer(vertexPositionsBufferCreationDesc, vertexPositions.data(), L"Vertex Positions Buffer");
+
+		const std::array<DirectX::XMFLOAT3, 3> vertexColors
+		{
+			DirectX::XMFLOAT3{1.0f, 0.0f, 0.0f},
+			DirectX::XMFLOAT3{0.0f, 1.0f, 0.0f},
+			DirectX::XMFLOAT3{0.0f, 0.0f, 1.0f},
+		};
+
+		const graphics::BufferCreationDesc vertexColorsBufferCreationDesc
+		{
+			.usage = graphics::BufferUsage::StructuredBuffer,
+			.format = DXGI_FORMAT_R32G32B32_FLOAT,
+			.componentCount = 3u,
+			.stride = sizeof(DirectX::XMFLOAT3)
+		};
+
+		mVertexColorBuffer = CreateBuffer(vertexColorsBufferCreationDesc, vertexColors.data(), L"Vertex Colors Buffer");
+
+		const std::array<uint32_t, 3u> indices{ 0u, 1u, 2u };
+
+		const graphics::BufferCreationDesc indexBufferCreationDesc
+		{
+			.usage = graphics::BufferUsage::IndexBuffer,
+			.format = DXGI_FORMAT_R32_UINT,
+			.componentCount = 3u,
+			.stride = sizeof(uint32_t)
+		};
+
+		mIndexBuffer = CreateBuffer(indexBufferCreationDesc, indices.data(), L"Index Buffer");
+
 		graphics::ShaderReflection shaderReflection{};
 		graphics::Shader vertexShader = graphics::ShaderCompiler::GetInstance().CompilerShader(graphics::ShaderType::Vertex, shaderReflection, GetAssetPath(L"Shaders/HelloTriangle.hlsl"));
 		graphics::Shader pixelShader = graphics::ShaderCompiler::GetInstance().CompilerShader(graphics::ShaderType::Pixel, shaderReflection, GetAssetPath(L"Shaders/HelloTriangle.hlsl"));
-	}
 
-	void Engine::ExecuteCommandList()
-	{
-		const std::array<ID3D12CommandList* const, 1u> commandLists
+		// Create root signature.
+		const D3D12_VERSIONED_ROOT_SIGNATURE_DESC rootSignatureDesc
 		{
-			mGraphicsCommandList.Get()
+			.Version = D3D_ROOT_SIGNATURE_VERSION_1_1,
+			.Desc_1_1
+			{
+                .NumParameters = static_cast<uint32_t>(shaderReflection.rootParameters.size()),
+			    .pParameters = shaderReflection.rootParameters.data(),
+				.NumStaticSamplers = 0u,
+			    .Flags = D3D12_ROOT_SIGNATURE_FLAG_CBV_SRV_UAV_HEAP_DIRECTLY_INDEXED | D3D12_ROOT_SIGNATURE_FLAG_SAMPLER_HEAP_DIRECTLY_INDEXED
+            }
 		};
 
-		mDirectCommandQueue->ExecuteCommandLists(1u, commandLists.data());
+		ID3DBlob* errorBlob{};
+		ID3DBlob* rootSignatureBlob{};
+
+		if (FAILED(::D3D12SerializeVersionedRootSignature(&rootSignatureDesc, &rootSignatureBlob, &errorBlob)))
+		{
+			if (errorBlob)
+			{
+				const char* message = (char*)errorBlob->GetBufferPointer();
+				ErrorMessage(message);
+			}
+		}
+
+		ThrowIfFailed(mDevice->CreateRootSignature(0u, rootSignatureBlob->GetBufferPointer(), rootSignatureBlob->GetBufferSize(), IID_PPV_ARGS(&mRootSignature)));
+
+		// Create pipeline state object.
+		const D3D12_GRAPHICS_PIPELINE_STATE_DESC psoDesc
+		{
+			.pRootSignature = mRootSignature.Get(),
+			.VS = 
+			{
+				.pShaderBytecode = vertexShader.mShaderBlob->GetBufferPointer(),
+				.BytecodeLength = vertexShader.mShaderBlob->GetBufferSize(),
+            },
+			.PS = 
+			{
+				.pShaderBytecode = pixelShader.mShaderBlob->GetBufferPointer(),
+				.BytecodeLength = pixelShader.mShaderBlob->GetBufferSize(),
+			},
+			.BlendState = CD3DX12_BLEND_DESC(D3D12_DEFAULT),
+			.SampleMask = UINT_MAX,
+			.RasterizerState = CD3DX12_RASTERIZER_DESC(D3D12_DEFAULT),
+			.DepthStencilState = CD3DX12_DEPTH_STENCIL_DESC(D3D12_DEFAULT),
+			.PrimitiveTopologyType = D3D12_PRIMITIVE_TOPOLOGY_TYPE_TRIANGLE,
+			.NumRenderTargets = 1u,
+			.RTVFormats = {DXGI_FORMAT_R8G8B8A8_UNORM},
+			.DSVFormat = {DXGI_FORMAT_D32_FLOAT},
+			.SampleDesc = {1u, 0u}
+		};
+
+		ThrowIfFailed(mDevice->CreateGraphicsPipelineState(&psoDesc, IID_PPV_ARGS(&mPso)));
 	}
 
-	void Engine::FlushCommandQueue()
+	graphics::Buffer Engine::CreateBuffer(const graphics::BufferCreationDesc& bufferCreationDesc, const void* data, const std::wstring_view bufferName)
 	{
-		mFrameFenceValues[mCurrentBackBufferIndex]++;
+		// Create resource and upload data to an intermediate upload buffer.
+		const D3D12_RESOURCE_FLAGS resourceFlags{ D3D12_RESOURCE_FLAG_NONE };
 
-		ThrowIfFailed(mDirectCommandQueue->Signal(mFence.Get(), mFrameFenceValues[mCurrentBackBufferIndex]));
+		const CD3DX12_RESOURCE_DESC resourceDesc = CD3DX12_RESOURCE_DESC::Buffer(static_cast<uint64_t>(bufferCreationDesc.stride * bufferCreationDesc.componentCount), resourceFlags);
 
-		if (mFence->GetCompletedValue() < mFrameFenceValues[mCurrentBackBufferIndex])
+		graphics::Buffer buffer{};
+		const CD3DX12_HEAP_PROPERTIES defaultHeapProperties{D3D12_HEAP_TYPE_DEFAULT};
+		ThrowIfFailed(mDevice->CreateCommittedResource(&defaultHeapProperties, D3D12_HEAP_FLAG_NONE, &resourceDesc, D3D12_RESOURCE_STATE_COMMON, nullptr, IID_PPV_ARGS(&buffer.resource)));
+
+		// If buffer is non a constant buffer, create upload heap to transfer data to CPU memory -> CPU / GPU Shared memory -> GPU only memory.
+		if (bufferCreationDesc.usage != graphics::BufferUsage::ConstantBuffer)
 		{
-			// Create HANDLE that will be used to block CPU thread until GPU has completed execution.
-			HANDLE fenceEvent = ::CreateEvent(nullptr, FALSE, FALSE, nullptr);
-			if (!fenceEvent)
+			// Create upload heap and intermediate resource.
+			Microsoft::WRL::ComPtr<ID3D12Resource> intermediateResource{};
+			const CD3DX12_HEAP_PROPERTIES uploadHeapProperties{ D3D12_HEAP_TYPE_UPLOAD };
+
+			ThrowIfFailed(mDevice->CreateCommittedResource(&uploadHeapProperties, D3D12_HEAP_FLAG_NONE, &resourceDesc, D3D12_RESOURCE_STATE_COMMON, nullptr, IID_PPV_ARGS(&intermediateResource)));
+
+			// Upload data to the buffer resource.
+			const LONG_PTR bufferSize = static_cast<LONG_PTR>(bufferCreationDesc.stride * bufferCreationDesc.componentCount);
+
+			const D3D12_SUBRESOURCE_DATA subresourceData
 			{
-				ErrorMessage(L"Failed to create fence event");
+				.pData = data,
+				.RowPitch = bufferSize,
+				.SlicePitch = bufferSize
+			};
+
+			auto commandList = mCopyCommandQueue.GetCommandList(mCurrentBackBufferIndex);
+			UpdateSubresources(commandList.Get(), buffer.resource.Get(), intermediateResource.Get(), 0u, 0u, 1u, &subresourceData);
+
+			mCopyCommandQueue.ExecuteCommandLists(std::move(commandList), mCurrentBackBufferIndex);
+			mCopyCommandQueue.Flush(mCurrentBackBufferIndex);
+
+			if (bufferCreationDesc.usage == graphics::BufferUsage::StructuredBuffer)
+			{
+				// Create SRV.
+				const D3D12_SHADER_RESOURCE_VIEW_DESC srvDesc
+				{
+					.Format = DXGI_FORMAT_UNKNOWN,
+					.ViewDimension = D3D12_SRV_DIMENSION_BUFFER,
+					.Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING,
+					.Buffer
+					{
+						.FirstElement = 0u,
+						.NumElements = bufferCreationDesc.componentCount,
+						.StructureByteStride = static_cast<UINT>(bufferCreationDesc.stride),
+						.Flags = D3D12_BUFFER_SRV_FLAG_NONE
+					}
+				};
+
+				mDevice->CreateShaderResourceView(buffer.resource.Get(), &srvDesc, mCbvSrvUavDescriptorHeap.GetCurrentDescriptorHandle().cpuDescriptorHandle);
+				buffer.srvIndex = mCbvSrvUavDescriptorHeap.GetCurrentDescriptorHandle().index;
 			}
 
-			// Specify that the fence event will be fired when the fence reaches the specified value.
-			ThrowIfFailed(mFence->SetEventOnCompletion(mFrameFenceValues[mCurrentBackBufferIndex], fenceEvent));
-			
-			// Wait until that event has been triggered.
+			mCbvSrvUavDescriptorHeap.OffsetCurrentDescriptorHandle();
 
-			assert(fenceEvent && "Fence Event is NULL");
-			::WaitForSingleObject(fenceEvent, INFINITE);
-			CloseHandle(fenceEvent);
+			SetName(buffer.resource.Get(), bufferName);
 		}
+
+		return buffer;
 	}
 
 	void Engine::CreateRenderTargets()

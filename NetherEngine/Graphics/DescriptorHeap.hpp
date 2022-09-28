@@ -17,7 +17,6 @@ namespace nether::graphics
 		DescriptorHeap() = default;
 		~DescriptorHeap() = default;
 
-		void Init(ID3D12Device5* const device, const D3D12_DESCRIPTOR_HEAP_TYPE descriptorHeapType, const uint32_t descriptorCount, const std::wstring_view descriptorHeapName);
 
 		DescriptorHeap(const DescriptorHeap& other) = delete;
 		DescriptorHeap& operator=(const DescriptorHeap& other) = delete;
@@ -25,6 +24,8 @@ namespace nether::graphics
 		DescriptorHeap(DescriptorHeap&& other) = delete;
 		DescriptorHeap& operator=(DescriptorHeap&& other) = delete;
 
+		void Init(ID3D12Device5* const device, const D3D12_DESCRIPTOR_HEAP_TYPE descriptorHeapType, const uint32_t descriptorCount, const std::wstring_view descriptorHeapName);
+		
 		// Accessors and modifiers.
 		ID3D12DescriptorHeap* GetDescriptorHeap() const { return mDescriptorHeap.Get(); }
 		DescriptorHandle GetCurrentDescriptorHandle() const { return mCurrentDescriptorHandle; }

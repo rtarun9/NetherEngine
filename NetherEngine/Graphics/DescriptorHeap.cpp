@@ -8,10 +8,25 @@ namespace nether::graphics
 	{
 		// Create descriptor heap and get descriptor size.
 
-		D3D12_DESCRIPTOR_HEAP_FLAGS descriptorHeapFlags{D3D12_DESCRIPTOR_HEAP_FLAG_NONE};
-		if (descriptorHeapType == D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV || descriptorHeapType == D3D12_DESCRIPTOR_HEAP_TYPE_SAMPLER)
+		const D3D12_DESCRIPTOR_HEAP_FLAGS descriptorHeapFlags = [&]() 
 		{
-			descriptorHeapFlags = D3D12_DESCRIPTOR_HEAP_FLAG_SHADER_VISIBLE;
+			switch (descriptorHeapType)
+			{
+			case D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV:
+			case D3D12_DESCRIPTOR_HEAP_TYPE_SAMPLER:
+			{
+				return D3D12_DESCRIPTOR_HEAP_FLAG_SHADER_VISIBLE;
+			}break;
+
+			default:
+			{
+				return D3D12_DESCRIPTOR_HEAP_FLAG_NONE;
+			}break;
+			}
+		}();
+
+		if (descriptorHeapFlags == D3D12_DESCRIPTOR_HEAP_FLAG_SHADER_VISIBLE)
+		{
 			mIsShaderVisible = true;
 		}
 
@@ -29,11 +44,17 @@ namespace nether::graphics
 		mDescriptorHandleIncrementSize = device->GetDescriptorHandleIncrementSize(descriptorHeapType);
 
 		// Setup descriptor handle from heap start.
-		D3D12_GPU_DESCRIPTOR_HANDLE gpuDescriptorHandleForHeapStart{};
-		if (mIsShaderVisible)
+		const D3D12_GPU_DESCRIPTOR_HANDLE gpuDescriptorHandleForHeapStart = [&]()
 		{
-			gpuDescriptorHandleForHeapStart = mDescriptorHeap->GetGPUDescriptorHandleForHeapStart();
-		}
+			if (mIsShaderVisible)
+			{
+				return mDescriptorHeap->GetGPUDescriptorHandleForHeapStart();
+			}
+			else
+			{
+				return D3D12_GPU_DESCRIPTOR_HANDLE{};
+			}
+		}();
 
 		mDescriptorHandleForHeapStart =
 		{
@@ -41,6 +62,8 @@ namespace nether::graphics
 			.gpuDescriptorHandle = gpuDescriptorHandleForHeapStart,
 			.index = 0u
 		};
+
+		mCurrentDescriptorHandle = mDescriptorHandleForHeapStart;
 	}
 
 	DescriptorHandle DescriptorHeap::GetDescriptorHandleFromIndex(const uint32_t index) const

@@ -26,6 +26,7 @@ VertexOutput VsMain(uint vertexID : SV_VertexID)
 
 float4 PsMain(VertexOutput input) : SV_Target
 {
-	return input.color;
+	const float3 color = pow(input.color.rgb, 1 / 2.2f);
+    return float4(color, 1.0f);
 }
 

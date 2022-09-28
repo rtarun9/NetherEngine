@@ -1,5 +1,5 @@
 #pragma once
 
 // All header file's under the Common directory.
-#include "DataTypes.hpp"
+#include "PrimitiveTypes.hpp"
 #include "Utils.hpp"

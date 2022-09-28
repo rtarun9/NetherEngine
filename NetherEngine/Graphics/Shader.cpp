@@ -85,7 +85,6 @@ namespace nether::graphics
 		if constexpr (NETHER_DEBUG_BUILD)
 		{
 			compilationArguments.push_back(DXC_ARG_DEBUG);
-			compilationArguments.push_back(DXC_ARG_SKIP_OPTIMIZATIONS);
 		}
 		else
 		{
@@ -165,7 +164,7 @@ namespace nether::graphics
 			
 				outShaderReflection.rootParameters.emplace_back(rootParameter);
 			}
-			else if (shaderInputBindDesc.Type == D3D_SIT_CBUFFER)
+			else if (shaderInputBindDesc.Type == D3D_SIT_CBUFFER && shaderInputBindDesc.BindPoint != 0)
 			{
 				const D3D12_ROOT_PARAMETER1 rootParameter
 				{

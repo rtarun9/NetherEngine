@@ -1,6 +1,8 @@
 #pragma once
 
 #include "Graphics/DescriptorHeap.hpp"
+#include "Graphics/Resources.hpp"
+#include "Graphics/CommandQueue.hpp"
 
 namespace nether::core
 {
@@ -36,8 +38,7 @@ namespace nether::core
 		void LoadCoreObjects();
 		void LoadContentAndAssets();
 
-		void ExecuteCommandList();
-		void FlushCommandQueue();
+		graphics::Buffer CreateBuffer(const graphics::BufferCreationDesc& bufferCreationDesc, const void* data, const std::wstring_view bufferName);
 
 	private:
 		void CreateRenderTargets();
@@ -66,25 +67,30 @@ namespace nether::core
 		Microsoft::WRL::ComPtr<IDXGIFactory6> mFactory{};
 		Microsoft::WRL::ComPtr<IDXGIAdapter4> mAdapter{};
 		Microsoft::WRL::ComPtr<ID3D12Device5> mDevice{};
-		Microsoft::WRL::ComPtr<ID3D12CommandQueue> mDirectCommandQueue{};
 
 		Microsoft::WRL::ComPtr<IDXGISwapChain4> mSwapChain{};
 		std::array<Microsoft::WRL::ComPtr<ID3D12Resource>, BACK_BUFFER_COUNT> mSwapChainBackBuffers{};
 
 		graphics::DescriptorHeap mRtvDescriptorHeap{};
 		graphics::DescriptorHeap mDsvDescriptorHeap{};
+		graphics::DescriptorHeap mCbvSrvUavDescriptorHeap{};
 
-		Microsoft::WRL::ComPtr<ID3D12CommandAllocator> mDirectCommandAllocator{};
-		Microsoft::WRL::ComPtr<ID3D12GraphicsCommandList3> mGraphicsCommandList{};
+		graphics::CommandQueue mDirectCommandQueue{};
+		graphics::CommandQueue mCopyCommandQueue{};
 
 		uint32_t mCurrentBackBufferIndex{};
-
-		Microsoft::WRL::ComPtr<ID3D12Fence> mFence{};
-		std::array<uint64_t, BACK_BUFFER_COUNT> mFrameFenceValues{};
 
 		Microsoft::WRL::ComPtr<ID3D12Resource> mDepthStencilBuffer{};
 
 		D3D12_VIEWPORT mViewport{};
 		D3D12_RECT mScissorRect{};
+
+		// Rendering sandbox data.
+		graphics::Buffer mVertexPositionBuffer{};
+		graphics::Buffer mVertexColorBuffer{};
+		graphics::Buffer mIndexBuffer{};
+
+		Microsoft::WRL::ComPtr<ID3D12RootSignature> mRootSignature{};
+		Microsoft::WRL::ComPtr<ID3D12PipelineState> mPso{};
 	};
 }
