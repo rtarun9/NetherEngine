@@ -11,22 +11,23 @@ namespace nether::graphics
 		IndexBuffer
 	};
 
-	struct Buffer
-	{
-		Microsoft::WRL::ComPtr<ID3D12Resource> resource{};
-
-		uint32_t srvIndex{INVALID_INDEX_UINT32};
-		uint32_t cbvIndex{INVALID_INDEX_UINT32};
-	};
-
 	// Stride here is basically the size of each component.
-	// Buffer size is componenetCount * stride.
+    // Buffer size is componenetCount * stride.
 	struct BufferCreationDesc
 	{
 		BufferUsage usage{};
 		DXGI_FORMAT format{};
 		uint32_t componentCount{};
 		size_t stride{};
+	};
+
+	struct Buffer
+	{
+		Microsoft::WRL::ComPtr<ID3D12Resource> resource{};
+
+		uint32_t srvIndex{INVALID_INDEX_UINT32};
+
+		uint8_t* mappedPointer{nullptr};
 	};
 }
 

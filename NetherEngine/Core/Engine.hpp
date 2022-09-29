@@ -1,8 +1,17 @@
 #pragma once
 
+#include "Graphics/GraphicsCommon.hpp"
+
 #include "Graphics/DescriptorHeap.hpp"
 #include "Graphics/Resources.hpp"
 #include "Graphics/CommandQueue.hpp"
+#include "Graphics/Shader.hpp"
+
+struct alignas(256) TransformBuffer
+{
+	DirectX::XMMATRIX modelMatrix;
+	DirectX::XMMATRIX viewProjectionMatrix;
+};
 
 namespace nether::core
 {
@@ -44,9 +53,6 @@ namespace nether::core
 		void CreateRenderTargets();
 
 	private:
-		static const uint32_t BACK_BUFFER_COUNT = 3u;
-
-	private:
 		bool mIsInitialized{ false };
 
 		HWND mWindowHandle{};
@@ -54,6 +60,7 @@ namespace nether::core
 		Uint2 mClientDimensions{};
 		float mAspectRatio{1.0f};
 
+		// Number of frames that have been rendered / processed so far.
 		uint64_t mFrameNumber{};
 
 		std::wstring mAssetsDirectoryPath{};
@@ -69,7 +76,10 @@ namespace nether::core
 		Microsoft::WRL::ComPtr<ID3D12Device5> mDevice{};
 
 		Microsoft::WRL::ComPtr<IDXGISwapChain4> mSwapChain{};
-		std::array<Microsoft::WRL::ComPtr<ID3D12Resource>, BACK_BUFFER_COUNT> mSwapChainBackBuffers{};
+		std::array<Microsoft::WRL::ComPtr<ID3D12Resource>, graphics::NUMBER_OF_BACK_BUFFERS> mSwapChainBackBuffers{};
+		
+		// The current back buffer index.
+		uint32_t mCurrentFrameIndex{};
 
 		graphics::DescriptorHeap mRtvDescriptorHeap{};
 		graphics::DescriptorHeap mDsvDescriptorHeap{};
@@ -77,8 +87,6 @@ namespace nether::core
 
 		graphics::CommandQueue mDirectCommandQueue{};
 		graphics::CommandQueue mCopyCommandQueue{};
-
-		uint32_t mCurrentBackBufferIndex{};
 
 		Microsoft::WRL::ComPtr<ID3D12Resource> mDepthStencilBuffer{};
 
@@ -88,9 +96,16 @@ namespace nether::core
 		// Rendering sandbox data.
 		graphics::Buffer mVertexPositionBuffer{};
 		graphics::Buffer mVertexColorBuffer{};
+
+		graphics::Buffer mTransformBuffer{};
+		TransformBuffer mTransformBufferData{};
+
+		D3D12_INDEX_BUFFER_VIEW mIndexBufferView{};
 		graphics::Buffer mIndexBuffer{};
 
 		Microsoft::WRL::ComPtr<ID3D12RootSignature> mRootSignature{};
 		Microsoft::WRL::ComPtr<ID3D12PipelineState> mPso{};
+
+		graphics::ShaderReflection mShaderReflection{};
 	};
 }

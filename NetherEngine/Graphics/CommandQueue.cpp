@@ -19,7 +19,7 @@ namespace nether::graphics
 		SetName(mCommandQueue.Get(), commandQueueName);
 
 		// Create command allocators.
-		for (uint32_t index : std::views::iota(0u, BACK_BUFFER_COUNT))
+		for (uint32_t index : std::views::iota(0u, graphics::FRAMES_IN_FLIGHT))
 		{
 			ThrowIfFailed(device->CreateCommandAllocator(commandListType, IID_PPV_ARGS(&mCommandAllocators[index])));
 			const std::wstring commandAllocatorName = commandQueueName.data() + std::to_wstring(index);

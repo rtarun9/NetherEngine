@@ -37,10 +37,10 @@ namespace nether::graphics
 
 	private:
 		Microsoft::WRL::ComPtr<ID3D12CommandQueue> mCommandQueue{};
-		std::array<Microsoft::WRL::ComPtr<ID3D12CommandAllocator>, BACK_BUFFER_COUNT> mCommandAllocators{};
+		std::array<Microsoft::WRL::ComPtr<ID3D12CommandAllocator>, graphics::FRAMES_IN_FLIGHT> mCommandAllocators{};
 
 		Microsoft::WRL::ComPtr<ID3D12Fence> mFence{};
-		std::array<uint64_t, BACK_BUFFER_COUNT> mFrameFenceValues{0u};
+		std::array<uint64_t, graphics::FRAMES_IN_FLIGHT> mFrameFenceValues{0u};
 
 		std::queue<Microsoft::WRL::ComPtr<ID3D12GraphicsCommandList2>> mCommandLists{};
 

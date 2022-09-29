@@ -4,7 +4,14 @@ struct RenderResources
 	uint colorBufferIndex;
 };
 
+struct TransformBuffer
+{
+	row_major matrix modelMatrix;
+	row_major matrix viewProjectionMatrix;
+};
+
 ConstantBuffer<RenderResources> renderResources : register(b0);
+ConstantBuffer<TransformBuffer> transformBuffer : register(b1);
 
 struct VertexOutput
 {
@@ -18,7 +25,7 @@ VertexOutput VsMain(uint vertexID : SV_VertexID)
 	StructuredBuffer<float3> colorBuffer = ResourceDescriptorHeap[renderResources.colorBufferIndex];
 
 	VertexOutput output;
-	output.position = float4(positionBuffer[vertexID], 1.0f);
+	output.position = mul(float4(positionBuffer[vertexID], 1.0f), mul(transformBuffer.modelMatrix, transformBuffer.viewProjectionMatrix));
 	output.color = float4(colorBuffer[vertexID], 1.0f);
 
 	return output;

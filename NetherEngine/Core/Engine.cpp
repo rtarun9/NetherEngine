@@ -2,8 +2,6 @@
 
 #include "Engine.hpp"
 
-#include "Graphics/Shader.hpp"
-
 namespace nether::core
 {
 	Engine::~Engine()
@@ -19,6 +17,8 @@ namespace nether::core
 
 		mClientDimensions = clientDimensions;
 	
+		mAspectRatio = static_cast<float>(clientDimensions.x) / static_cast<float>(clientDimensions.y);
+
 		LoadCoreObjects();
 		LoadContentAndAssets();
 
@@ -27,21 +27,30 @@ namespace nether::core
 
 	void Engine::Update(const float deltaTime)
 	{
+		static float angle{ 0.0f };
+		angle += deltaTime;
+
+		mTransformBufferData.modelMatrix = DirectX::XMMatrixRotationZ(angle) * DirectX::XMMatrixRotationX(-angle);
+		mTransformBufferData.viewProjectionMatrix = DirectX::XMMatrixLookAtLH(DirectX::XMVectorSet(0.0f, 0.0f, -10.0f, 1.0f), DirectX::XMVectorZero(), DirectX::XMVectorSet(0.0f, 1.0f, 0.0f, 0.0f))
+			 * DirectX::XMMatrixPerspectiveFovLH(DirectX::XMConvertToRadians(45.0f), mAspectRatio, 0.1f, 1000.0f);
+
+		std::memcpy(mTransformBuffer.mappedPointer, &mTransformBufferData, sizeof(TransformBuffer));
 	}
 
 	void Engine::Render()
 	{
 		// Reset command allocator and list.
-		ThrowIfFailed(mDirectCommandQueue.GetCommandAllocator(mCurrentBackBufferIndex)->Reset());
+		Microsoft::WRL::ComPtr<ID3D12CommandAllocator> commandAllocator = mDirectCommandQueue.GetCommandAllocator(mCurrentFrameIndex);
+		ThrowIfFailed(commandAllocator->Reset());
 
-		Microsoft::WRL::ComPtr<ID3D12GraphicsCommandList2> commandList = mDirectCommandQueue.GetCommandList(mCurrentBackBufferIndex);
+		Microsoft::WRL::ComPtr<ID3D12GraphicsCommandList2> commandList = mDirectCommandQueue.GetCommandList(mCurrentFrameIndex);
 
 		// Clear RTV and DSV.
-		const D3D12_CPU_DESCRIPTOR_HANDLE rtvHandle = mRtvDescriptorHeap.GetDescriptorHandleFromIndex(mCurrentBackBufferIndex).cpuDescriptorHandle;
+		const D3D12_CPU_DESCRIPTOR_HANDLE rtvHandle = mRtvDescriptorHeap.GetDescriptorHandleFromIndex(mCurrentFrameIndex).cpuDescriptorHandle;
 		const D3D12_CPU_DESCRIPTOR_HANDLE dsvHandle = mDsvDescriptorHeap.GetDescriptorHandleFromIndex(0u).cpuDescriptorHandle;
 
 		// Transition back buffer from state present to state render target.
-		CD3DX12_RESOURCE_BARRIER backBufferPresentToRT = CD3DX12_RESOURCE_BARRIER::Transition(mSwapChainBackBuffers[mCurrentBackBufferIndex].Get(), D3D12_RESOURCE_STATE_PRESENT, D3D12_RESOURCE_STATE_RENDER_TARGET);
+		CD3DX12_RESOURCE_BARRIER backBufferPresentToRT = CD3DX12_RESOURCE_BARRIER::Transition(mSwapChainBackBuffers[mCurrentFrameIndex].Get(), D3D12_RESOURCE_STATE_PRESENT, D3D12_RESOURCE_STATE_RENDER_TARGET);
 		commandList->ResourceBarrier(1u, &backBufferPresentToRT);
 
 		static const std::array<float, 4> clearColor{0.1f, 0.1f, 0.1f, 1.0f};
@@ -57,21 +66,13 @@ namespace nether::core
 			uint32_t colorBufferIndex;
 		};
 
-		RenderResources renderResources =
+		const RenderResources renderResources =
 		{
 			.positionBufferIndex = mVertexPositionBuffer.srvIndex,
 			.colorBufferIndex = mVertexColorBuffer.srvIndex,
 		};
 
-
-		const D3D12_INDEX_BUFFER_VIEW indexBufferView
-		{
-			.BufferLocation = mIndexBuffer.resource->GetGPUVirtualAddress(),
-			.SizeInBytes = sizeof(uint32_t) * 3u,
-			.Format = DXGI_FORMAT_R32_UINT,
-		};
-
-		commandList->IASetIndexBuffer(&indexBufferView);
+		commandList->IASetIndexBuffer(&mIndexBufferView);
 
 		std::array<ID3D12DescriptorHeap* const, 1u> descriptorHeaps{ mCbvSrvUavDescriptorHeap.GetDescriptorHeap() };
 		commandList->SetDescriptorHeaps(1u, { descriptorHeaps.data()});
@@ -82,30 +83,33 @@ namespace nether::core
 
 		commandList->OMSetRenderTargets(1u, &rtvHandle, FALSE, &dsvHandle);
 		commandList->IASetPrimitiveTopology(D3D12_PRIMITIVE_TOPOLOGY::D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
-		commandList->SetGraphicsRoot32BitConstants(0u, 2u, &renderResources, 0u);
-		commandList->DrawInstanced(3u, 1u, 0u, 0u);
+
+		commandList->SetGraphicsRoot32BitConstants(mShaderReflection.rootParameterMap[L"renderResources"], 2u, &renderResources, 0u);
+		commandList->SetGraphicsRootConstantBufferView(mShaderReflection.rootParameterMap[L"transformBuffer"], mTransformBuffer.resource->GetGPUVirtualAddress());
+
+		commandList->DrawIndexedInstanced(36u, 1u, 0u, 0u, 0u);
 
 		// Transition back buffer from render target to present.
-		CD3DX12_RESOURCE_BARRIER backBufferRTToPresent = CD3DX12_RESOURCE_BARRIER::Transition(mSwapChainBackBuffers[mCurrentBackBufferIndex].Get(), D3D12_RESOURCE_STATE_RENDER_TARGET, D3D12_RESOURCE_STATE_PRESENT);
+		const CD3DX12_RESOURCE_BARRIER backBufferRTToPresent = CD3DX12_RESOURCE_BARRIER::Transition(mSwapChainBackBuffers[mCurrentFrameIndex].Get(), D3D12_RESOURCE_STATE_RENDER_TARGET, D3D12_RESOURCE_STATE_PRESENT);
 		commandList->ResourceBarrier(1u, &backBufferRTToPresent);
 
-		mDirectCommandQueue.ExecuteCommandLists(std::move(commandList), mCurrentBackBufferIndex);
+		mDirectCommandQueue.ExecuteCommandLists(std::move(commandList), mCurrentFrameIndex);
 
 		const uint32_t syncInterval = mVsyncEnabled ? 1u : 0u;
 		const uint32_t presentFlags = mIsTearingSupported && !mVsyncEnabled ? DXGI_PRESENT_ALLOW_TEARING : 0u;
 
 		mSwapChain->Present(syncInterval, presentFlags);
 
-		mDirectCommandQueue.Flush(mCurrentBackBufferIndex);
-		mCurrentBackBufferIndex = mSwapChain->GetCurrentBackBufferIndex();
+		mDirectCommandQueue.Flush(mCurrentFrameIndex);
+		mCurrentFrameIndex = mSwapChain->GetCurrentBackBufferIndex();
 
 		mFrameNumber++;
 	}
 
 	void Engine::Destroy()
 	{
-		mCopyCommandQueue.Flush(mCurrentBackBufferIndex);
-		mDirectCommandQueue.Flush(mCurrentBackBufferIndex);
+		mCopyCommandQueue.Flush(mCurrentFrameIndex);
+		mDirectCommandQueue.Flush(mCurrentFrameIndex);
 	}
 
 	void Engine::Resize(const Uint2& clientDimensions)
@@ -234,7 +238,7 @@ namespace nether::core
 			.Stereo = FALSE,
 			.SampleDesc = {1u, 0u},
 			.BufferUsage = DXGI_USAGE_RENDER_TARGET_OUTPUT,
-			.BufferCount = BACK_BUFFER_COUNT,
+			.BufferCount = graphics::FRAMES_IN_FLIGHT,
 			.Scaling = DXGI_SCALING_STRETCH,
 			.SwapEffect = DXGI_SWAP_EFFECT_FLIP_DISCARD,
 			.AlphaMode = DXGI_ALPHA_MODE_UNSPECIFIED,
@@ -244,10 +248,10 @@ namespace nether::core
 		Microsoft::WRL::ComPtr<IDXGISwapChain1> swapChain{};
 		ThrowIfFailed(mFactory->CreateSwapChainForHwnd(mDirectCommandQueue.GetCommandQueue(), mWindowHandle, &swapChainDesc, nullptr, nullptr, &swapChain));
 		ThrowIfFailed(swapChain.As(&mSwapChain));
-		mCurrentBackBufferIndex = mSwapChain->GetCurrentBackBufferIndex();
+		mCurrentFrameIndex = mSwapChain->GetCurrentBackBufferIndex();
 
 		// Create descriptor heaps.
-		mRtvDescriptorHeap.Init(mDevice.Get(), D3D12_DESCRIPTOR_HEAP_TYPE_RTV, BACK_BUFFER_COUNT, L"RTV Descriptor Heap");
+		mRtvDescriptorHeap.Init(mDevice.Get(), D3D12_DESCRIPTOR_HEAP_TYPE_RTV, graphics::NUMBER_OF_BACK_BUFFERS, L"RTV Descriptor Heap");
 		mDsvDescriptorHeap.Init(mDevice.Get(), D3D12_DESCRIPTOR_HEAP_TYPE_DSV, 1u, L"DSV Descriptor Heap");
 		mCbvSrvUavDescriptorHeap.Init(mDevice.Get(), D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV, 100u, L"CBV SRV UAV Descriptor Heap");
 
@@ -300,11 +304,11 @@ namespace nether::core
 		// Change state of DSV from common to depth write.
 		const CD3DX12_RESOURCE_BARRIER dsvFromCommonToDepthWrite = CD3DX12_RESOURCE_BARRIER::Transition(mDepthStencilBuffer.Get(), D3D12_RESOURCE_STATE_COMMON, D3D12_RESOURCE_STATE_DEPTH_WRITE);
 		
-		auto commandList = mDirectCommandQueue.GetCommandList(mCurrentBackBufferIndex);
+		auto commandList = mDirectCommandQueue.GetCommandList(mCurrentFrameIndex);
 
 		commandList->ResourceBarrier(1u, &dsvFromCommonToDepthWrite);
-		mDirectCommandQueue.ExecuteCommandLists(std::move(commandList), mCurrentBackBufferIndex);
-		mDirectCommandQueue.Flush(mCurrentBackBufferIndex);
+		mDirectCommandQueue.ExecuteCommandLists(std::move(commandList), mCurrentFrameIndex);
+		mDirectCommandQueue.Flush(mCurrentFrameIndex);
 
 		// Setup viewport and scissor rect.
 		mViewport =
@@ -328,51 +332,97 @@ namespace nether::core
 
 	void Engine::LoadContentAndAssets()
 	{
-		const std::array<DirectX::XMFLOAT3, 3> vertexPositions
+		const std::array<DirectX::XMFLOAT3, 8> vertexPositions
 		{
-			DirectX::XMFLOAT3{0.5f, -0.5f, 0.0f},
-			DirectX::XMFLOAT3{-0.5f, -0.5f, 0.0f},
-			DirectX::XMFLOAT3{0.0f, 0.5f, 0.0f},
+			DirectX::XMFLOAT3(-1.0f, -1.0f, -1.0f),
+			DirectX::XMFLOAT3(-1.0f, +1.0f, -1.0f),
+			DirectX::XMFLOAT3(+1.0f, +1.0f, -1.0f),
+			DirectX::XMFLOAT3(+1.0f, -1.0f, -1.0f),
+			DirectX::XMFLOAT3(-1.0f, -1.0f, +1.0f),
+			DirectX::XMFLOAT3(-1.0f, +1.0f, +1.0f),
+			DirectX::XMFLOAT3(+1.0f, +1.0f, +1.0f),
+			DirectX::XMFLOAT3(+1.0f, -1.0f, +1.0f),
 		};
 
 		const graphics::BufferCreationDesc vertexPositionsBufferCreationDesc
 		{
 			.usage = graphics::BufferUsage::StructuredBuffer,
 			.format = DXGI_FORMAT_R32G32B32_FLOAT,
-			.componentCount = 3u,
+			.componentCount = static_cast<uint32_t>(vertexPositions.size()),
 			.stride = sizeof(DirectX::XMFLOAT3)
 		};
 
 		mVertexPositionBuffer = CreateBuffer(vertexPositionsBufferCreationDesc, vertexPositions.data(), L"Vertex Positions Buffer");
 
-		const std::array<DirectX::XMFLOAT3, 3> vertexColors
+		const std::array<DirectX::XMFLOAT3, 8> vertexColors
 		{
 			DirectX::XMFLOAT3{1.0f, 0.0f, 0.0f},
 			DirectX::XMFLOAT3{0.0f, 1.0f, 0.0f},
 			DirectX::XMFLOAT3{0.0f, 0.0f, 1.0f},
+			DirectX::XMFLOAT3{0.0f, 1.0f, 1.0f},
+			DirectX::XMFLOAT3{1.0f, 1.0f, 1.0f},
+			DirectX::XMFLOAT3{1.0f, 1.0f, 0.0f},
+			DirectX::XMFLOAT3{1.0f, 0.0f, 1.0f},
+			DirectX::XMFLOAT3{0.0f, 1.0f, 1.0f},
 		};
 
 		const graphics::BufferCreationDesc vertexColorsBufferCreationDesc
 		{
 			.usage = graphics::BufferUsage::StructuredBuffer,
 			.format = DXGI_FORMAT_R32G32B32_FLOAT,
-			.componentCount = 3u,
+			.componentCount = static_cast<uint32_t>(vertexColors.size()),
 			.stride = sizeof(DirectX::XMFLOAT3)
 		};
 
 		mVertexColorBuffer = CreateBuffer(vertexColorsBufferCreationDesc, vertexColors.data(), L"Vertex Colors Buffer");
 
-		const std::array<uint32_t, 3u> indices{ 0u, 1u, 2u };
+		const std::array<uint32_t, 36u> indices
+		{
+			0, 1, 2,
+			0, 2, 3,
+
+			4, 6, 5,
+			4, 7, 6,
+
+			4, 5, 1,
+			4, 1, 0,
+
+			3, 2, 6,
+			3, 6, 7,
+
+			1, 5, 6,
+			1, 6, 2,
+
+			4, 0, 3,
+			4, 3, 7
+		};
 
 		const graphics::BufferCreationDesc indexBufferCreationDesc
 		{
 			.usage = graphics::BufferUsage::IndexBuffer,
 			.format = DXGI_FORMAT_R32_UINT,
-			.componentCount = 3u,
+			.componentCount = static_cast<uint32_t>(indices.size()),
 			.stride = sizeof(uint32_t)
 		};
 
 		mIndexBuffer = CreateBuffer(indexBufferCreationDesc, indices.data(), L"Index Buffer");
+
+		mIndexBufferView =
+		{
+			.BufferLocation = mIndexBuffer.resource->GetGPUVirtualAddress(),
+			.SizeInBytes = sizeof(uint32_t) * static_cast<uint32_t>(indices.size()),
+			.Format = DXGI_FORMAT_R32_UINT,
+		};
+
+		const graphics::BufferCreationDesc transformBufferCreationDesc
+		{
+			.usage = graphics::BufferUsage::ConstantBuffer,
+			.format = DXGI_FORMAT_UNKNOWN,
+			.componentCount = 1u,
+			.stride = 256,
+		};
+
+		mTransformBuffer = CreateBuffer(transformBufferCreationDesc, nullptr, L"Transform Constant Buffer");
 
 		graphics::ShaderReflection shaderReflection{};
 		graphics::Shader vertexShader = graphics::ShaderCompiler::GetInstance().CompilerShader(graphics::ShaderType::Vertex, shaderReflection, GetAssetPath(L"Shaders/HelloTriangle.hlsl"));
@@ -390,6 +440,8 @@ namespace nether::core
 			    .Flags = D3D12_ROOT_SIGNATURE_FLAG_CBV_SRV_UAV_HEAP_DIRECTLY_INDEXED | D3D12_ROOT_SIGNATURE_FLAG_SAMPLER_HEAP_DIRECTLY_INDEXED
             }
 		};
+
+		mShaderReflection = shaderReflection;
 
 		ID3DBlob* errorBlob{};
 		ID3DBlob* rootSignatureBlob{};
@@ -441,12 +493,15 @@ namespace nether::core
 		const CD3DX12_RESOURCE_DESC resourceDesc = CD3DX12_RESOURCE_DESC::Buffer(static_cast<uint64_t>(bufferCreationDesc.stride * bufferCreationDesc.componentCount), resourceFlags);
 
 		graphics::Buffer buffer{};
-		const CD3DX12_HEAP_PROPERTIES defaultHeapProperties{D3D12_HEAP_TYPE_DEFAULT};
-		ThrowIfFailed(mDevice->CreateCommittedResource(&defaultHeapProperties, D3D12_HEAP_FLAG_NONE, &resourceDesc, D3D12_RESOURCE_STATE_COMMON, nullptr, IID_PPV_ARGS(&buffer.resource)));
 
-		// If buffer is non a constant buffer, create upload heap to transfer data to CPU memory -> CPU / GPU Shared memory -> GPU only memory.
-		if (bufferCreationDesc.usage != graphics::BufferUsage::ConstantBuffer)
+		switch (bufferCreationDesc.usage)
 		{
+		case graphics::BufferUsage::IndexBuffer:
+		case graphics::BufferUsage::StructuredBuffer:
+		{
+			const CD3DX12_HEAP_PROPERTIES defaultHeapProperties{ D3D12_HEAP_TYPE_DEFAULT };
+			ThrowIfFailed(mDevice->CreateCommittedResource(&defaultHeapProperties, D3D12_HEAP_FLAG_NONE, &resourceDesc, D3D12_RESOURCE_STATE_COMMON, nullptr, IID_PPV_ARGS(&buffer.resource)));
+
 			// Create upload heap and intermediate resource.
 			Microsoft::WRL::ComPtr<ID3D12Resource> intermediateResource{};
 			const CD3DX12_HEAP_PROPERTIES uploadHeapProperties{ D3D12_HEAP_TYPE_UPLOAD };
@@ -463,11 +518,11 @@ namespace nether::core
 				.SlicePitch = bufferSize
 			};
 
-			auto commandList = mCopyCommandQueue.GetCommandList(mCurrentBackBufferIndex);
+			auto commandList = mCopyCommandQueue.GetCommandList(mCurrentFrameIndex);
 			UpdateSubresources(commandList.Get(), buffer.resource.Get(), intermediateResource.Get(), 0u, 0u, 1u, &subresourceData);
 
-			mCopyCommandQueue.ExecuteCommandLists(std::move(commandList), mCurrentBackBufferIndex);
-			mCopyCommandQueue.Flush(mCurrentBackBufferIndex);
+			mCopyCommandQueue.ExecuteCommandLists(std::move(commandList), mCurrentFrameIndex);
+			mCopyCommandQueue.Flush(mCurrentFrameIndex);
 
 			if (bufferCreationDesc.usage == graphics::BufferUsage::StructuredBuffer)
 			{
@@ -491,10 +546,35 @@ namespace nether::core
 			}
 
 			mCbvSrvUavDescriptorHeap.OffsetCurrentDescriptorHandle();
+		}break;
 
-			SetName(buffer.resource.Get(), bufferName);
+		case graphics::BufferUsage::ConstantBuffer:
+		{
+			const uint64_t bufferSize = static_cast<uint64_t>(bufferCreationDesc.componentCount * bufferCreationDesc.stride);
+			
+			// Create a buffer in GPU / CPU shared memory.
+			const CD3DX12_HEAP_PROPERTIES uploadHeapProperties(D3D12_HEAP_TYPE_UPLOAD);
+			const CD3DX12_RESOURCE_DESC resourceDesc = CD3DX12_RESOURCE_DESC::Buffer(bufferSize, D3D12_RESOURCE_FLAG_NONE);
+
+			ThrowIfFailed(mDevice->CreateCommittedResource(&uploadHeapProperties, D3D12_HEAP_FLAG_NONE, &resourceDesc, D3D12_RESOURCE_STATE_COMMON, nullptr, IID_PPV_ARGS(&buffer.resource)));
+
+			// Get a mapped pointer so we can access this shared memory from the CPU.
+			const CD3DX12_RANGE readOnlyRange{ 0, 0 };
+			ThrowIfFailed(buffer.resource->Map(0u, &readOnlyRange, reinterpret_cast<void**>(&buffer.mappedPointer)));
+
+			// Create CBV for the buffer.
+			const D3D12_CONSTANT_BUFFER_VIEW_DESC cbvDesc
+			{
+				.BufferLocation = buffer.resource->GetGPUVirtualAddress(),
+				.SizeInBytes = static_cast<uint32_t>(bufferSize),
+			};
+
+			mDevice->CreateConstantBufferView(&cbvDesc, mCbvSrvUavDescriptorHeap.GetCurrentDescriptorHandle().cpuDescriptorHandle);
+			mCbvSrvUavDescriptorHeap.OffsetCurrentDescriptorHandle();
+		}break;
 		}
 
+	    SetName(buffer.resource.Get(), bufferName);
 		return buffer;
 	}
 
@@ -502,7 +582,7 @@ namespace nether::core
 	{
 		CD3DX12_CPU_DESCRIPTOR_HANDLE rtvHandle(mRtvDescriptorHeap.GetDescriptorHandleForHeapStart().cpuDescriptorHandle);
 
-		for (uint32_t backBufferIndex : std::views::iota(0u, BACK_BUFFER_COUNT))
+		for (uint32_t backBufferIndex : std::views::iota(0u, graphics::NUMBER_OF_BACK_BUFFERS))
 		{
 			ThrowIfFailed(mSwapChain->GetBuffer(backBufferIndex, IID_PPV_ARGS(&mSwapChainBackBuffers[backBufferIndex])));
 

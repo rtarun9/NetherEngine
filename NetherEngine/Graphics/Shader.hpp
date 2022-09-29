@@ -10,9 +10,11 @@ namespace nether::graphics
 
 	// Holds vector of root parameters, that can be used to create the root signature. Shader object will not hold this as root parameters are to be specified
 	// for several shaders in the pipeline.
+	// To prevent having to manually enter the root parameter index, use the rootParameterMap which maps the bound resource name to the root parameter.
 	struct ShaderReflection
 	{
 		std::vector<D3D12_ROOT_PARAMETER1> rootParameters{};
+		std::unordered_map<std::wstring, uint32_t> rootParameterMap{};
 	};
 
 	// Holds shader bytecode for a shader (the shader must contain  the correct entry point (name as VsMain, PsMain, CsMain etc).

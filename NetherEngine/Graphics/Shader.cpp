@@ -145,6 +145,8 @@ namespace nether::graphics
 			D3D12_SHADER_INPUT_BIND_DESC shaderInputBindDesc{};
 			ThrowIfFailed(shaderReflection->GetResourceBindingDesc(i, &shaderInputBindDesc));
 
+			outShaderReflection.rootParameterMap[StringToWString(shaderInputBindDesc.Name)] = i;
+
 			ID3D12ShaderReflectionConstantBuffer* shaderReflectionConstantBuffer = shaderReflection->GetConstantBufferByIndex(i);
 			D3D12_SHADER_BUFFER_DESC constantBufferDesc{};
 			shaderReflectionConstantBuffer->GetDesc(&constantBufferDesc);
