@@ -27,12 +27,13 @@ namespace nether::core
 
 	void Engine::Update(const float deltaTime)
 	{
+		mCamera.Update(deltaTime);
+
 		static float angle{ 0.0f };
 		angle += deltaTime;
 
 		mTransformBufferData.modelMatrix = DirectX::XMMatrixRotationZ(angle) * DirectX::XMMatrixRotationX(-angle);
-		mTransformBufferData.viewProjectionMatrix = DirectX::XMMatrixLookAtLH(DirectX::XMVectorSet(0.0f, 0.0f, -10.0f, 1.0f), DirectX::XMVectorZero(), DirectX::XMVectorSet(0.0f, 1.0f, 0.0f, 0.0f))
-			 * DirectX::XMMatrixPerspectiveFovLH(DirectX::XMConvertToRadians(45.0f), mAspectRatio, 0.1f, 1000.0f);
+		mTransformBufferData.viewProjectionMatrix = mCamera.GetLookAtMatrix() * DirectX::XMMatrixPerspectiveFovLH(DirectX::XMConvertToRadians(45.0f), mAspectRatio, 0.1f, 1000.0f);
 
 		std::memcpy(mTransformBuffer.mappedPointer, &mTransformBufferData, sizeof(TransformBuffer));
 	}
@@ -50,17 +51,25 @@ namespace nether::core
 		const D3D12_CPU_DESCRIPTOR_HANDLE dsvHandle = mDsvDescriptorHeap.GetDescriptorHandleFromIndex(0u).cpuDescriptorHandle;
 
 		// Transition back buffer from state present to state render target.
-		CD3DX12_RESOURCE_BARRIER backBufferPresentToRT = CD3DX12_RESOURCE_BARRIER::Transition(mSwapChainBackBuffers[mCurrentFrameIndex].Get(), D3D12_RESOURCE_STATE_PRESENT, D3D12_RESOURCE_STATE_RENDER_TARGET);
+		const CD3DX12_RESOURCE_BARRIER backBufferPresentToRT = CD3DX12_RESOURCE_BARRIER::Transition(mSwapChainBackBuffers[mCurrentFrameIndex].Get(), D3D12_RESOURCE_STATE_PRESENT, D3D12_RESOURCE_STATE_RENDER_TARGET);
 		commandList->ResourceBarrier(1u, &backBufferPresentToRT);
 
 		static const std::array<float, 4> clearColor{0.1f, 0.1f, 0.1f, 1.0f};
 		commandList->ClearRenderTargetView(rtvHandle, clearColor.data(), 0u, nullptr);
 		commandList->ClearDepthStencilView(dsvHandle, D3D12_CLEAR_FLAG_DEPTH, 1.0f, 1u, 0u, nullptr);
 
-		// Set root signature, pso and render resources.
+		// Set descriptor heaps, root signature, pso and render resources.
+		const std::array<ID3D12DescriptorHeap* const, 1u> descriptorHeaps
+		{ 
+			mCbvSrvUavDescriptorHeap.GetDescriptorHeap() 
+		};
+
+		commandList->SetDescriptorHeaps(static_cast<uint32_t>(descriptorHeaps.size()), descriptorHeaps.data());
+
 		commandList->SetGraphicsRootSignature(mRootSignature.Get());
 		commandList->SetPipelineState(mPso.Get());
-		struct RenderResources
+
+		const struct RenderResources
 		{
 			uint32_t positionBufferIndex;
 			uint32_t colorBufferIndex;
@@ -73,9 +82,6 @@ namespace nether::core
 		};
 
 		commandList->IASetIndexBuffer(&mIndexBufferView);
-
-		std::array<ID3D12DescriptorHeap* const, 1u> descriptorHeaps{ mCbvSrvUavDescriptorHeap.GetDescriptorHeap() };
-		commandList->SetDescriptorHeaps(1u, { descriptorHeaps.data()});
 
 		// Set viewport and render targets.
 		commandList->RSSetViewports(1u, &mViewport);
@@ -100,8 +106,9 @@ namespace nether::core
 
 		mSwapChain->Present(syncInterval, presentFlags);
 
-		mDirectCommandQueue.Flush(mCurrentFrameIndex);
 		mCurrentFrameIndex = mSwapChain->GetCurrentBackBufferIndex();
+
+		mDirectCommandQueue.WaitForFenceValueAtFrameIndex(mCurrentFrameIndex);
 
 		mFrameNumber++;
 	}
@@ -124,6 +131,8 @@ namespace nether::core
 
 	void Engine::OnKeyAction(const uint8_t keycode, const bool isKeyDown)
 	{
+		mCamera.HandleInput(keycode, isKeyDown);
+
 		if (isKeyDown)
 		{
 			if (keycode == VK_F5)
@@ -142,6 +151,7 @@ namespace nether::core
 	{
 		std::filesystem::path currentDirectory = std::filesystem::current_path();
 
+		// The / here basically concatenates two directories using the / separator.
 		while (!std::filesystem::exists(currentDirectory / "Assets"))
 		{
 			if (currentDirectory.has_parent_path())
@@ -172,18 +182,24 @@ namespace nether::core
 
 	void Engine::LoadCoreObjects()
 	{
-		uint32_t dxgiCreateFactoryFlags = 0;
+		// Create the IDXGIFactory with CREATE_FACTORY_DEBUG in debug build.
+		const uint32_t dxgiCreateFactoryFlags = []()
+		{
+			if constexpr (NETHER_DEBUG_BUILD)
+			{
+				return DXGI_CREATE_FACTORY_DEBUG;
+			}
 
-		// Enable the debug layer.
+			return 0;
+		}();
+
+		// Enable the debug layer in debug build.
 		if constexpr (NETHER_DEBUG_BUILD)
 		{
 			ThrowIfFailed(::D3D12GetInterface(CLSID_D3D12Debug, IID_PPV_ARGS(&mDebug)));
 			mDebug->EnableDebugLayer();
 			mDebug->SetEnableGPUBasedValidation(TRUE);
 			mDebug->SetEnableSynchronizedCommandQueueValidation(TRUE);
-
-			// Create the IDXGIFactory with CREATE_FACTORY_DEBUG in debug build.
-			dxgiCreateFactoryFlags |= DXGI_CREATE_FACTORY_DEBUG;
 		}
 
 		// Create DXGI Factory.
@@ -202,12 +218,12 @@ namespace nether::core
 		}
 
 		// Check if tearing is supported.
-		BOOL tearingSupported{ FALSE };
+		BOOL tearingSupported{FALSE};
 		if (SUCCEEDED(mFactory->CheckFeatureSupport(DXGI_FEATURE_PRESENT_ALLOW_TEARING, &tearingSupported, sizeof(tearingSupported))))
 		{
 			tearingSupported = TRUE;
 		}
-
+		
 		mIsTearingSupported = tearingSupported == TRUE;
 
 		// Create D3D12 Device.
@@ -220,9 +236,9 @@ namespace nether::core
 			Microsoft::WRL::ComPtr<ID3D12InfoQueue1> infoQueue{};
 			ThrowIfFailed(mDevice.As(&infoQueue));
 
-			infoQueue->SetBreakOnSeverity(D3D12_MESSAGE_SEVERITY_CORRUPTION, TRUE);
-			infoQueue->SetBreakOnSeverity(D3D12_MESSAGE_SEVERITY_ERROR, TRUE);
-			infoQueue->SetBreakOnSeverity(D3D12_MESSAGE_SEVERITY_WARNING, TRUE);
+			ThrowIfFailed(infoQueue->SetBreakOnSeverity(D3D12_MESSAGE_SEVERITY_CORRUPTION, TRUE));
+			ThrowIfFailed(infoQueue->SetBreakOnSeverity(D3D12_MESSAGE_SEVERITY_ERROR, TRUE));
+			ThrowIfFailed(infoQueue->SetBreakOnSeverity(D3D12_MESSAGE_SEVERITY_WARNING, TRUE));
 		}
 
 		// Create Direct command queue.
@@ -285,7 +301,7 @@ namespace nether::core
 			}
 		};
 
-		ThrowIfFailed(mDevice->CreateCommittedResource(&defaultHeapProperties, D3D12_HEAP_FLAG_NONE, &depthStencilBufferResourceDesc, D3D12_RESOURCE_STATE_COMMON, &optimizedClearValue, IID_PPV_ARGS(&mDepthStencilBuffer)));
+		ThrowIfFailed(mDevice->CreateCommittedResource(&defaultHeapProperties, D3D12_HEAP_FLAG_NONE, &depthStencilBufferResourceDesc, D3D12_RESOURCE_STATE_DEPTH_WRITE, &optimizedClearValue, IID_PPV_ARGS(&mDepthStencilBuffer)));
 
 		// Create DSV.
 		const D3D12_DEPTH_STENCIL_VIEW_DESC dsvDesc
@@ -300,15 +316,6 @@ namespace nether::core
 
 		const CD3DX12_CPU_DESCRIPTOR_HANDLE dsvHandle{ mDsvDescriptorHeap.GetDescriptorHandleForHeapStart().cpuDescriptorHandle};
 		mDevice->CreateDepthStencilView(mDepthStencilBuffer.Get(), &dsvDesc, dsvHandle);
-
-		// Change state of DSV from common to depth write.
-		const CD3DX12_RESOURCE_BARRIER dsvFromCommonToDepthWrite = CD3DX12_RESOURCE_BARRIER::Transition(mDepthStencilBuffer.Get(), D3D12_RESOURCE_STATE_COMMON, D3D12_RESOURCE_STATE_DEPTH_WRITE);
-		
-		auto commandList = mDirectCommandQueue.GetCommandList(mCurrentFrameIndex);
-
-		commandList->ResourceBarrier(1u, &dsvFromCommonToDepthWrite);
-		mDirectCommandQueue.ExecuteCommandLists(std::move(commandList), mCurrentFrameIndex);
-		mDirectCommandQueue.Flush(mCurrentFrameIndex);
 
 		// Setup viewport and scissor rect.
 		mViewport =
@@ -425,8 +432,8 @@ namespace nether::core
 		mTransformBuffer = CreateBuffer(transformBufferCreationDesc, nullptr, L"Transform Constant Buffer");
 
 		graphics::ShaderReflection shaderReflection{};
-		graphics::Shader vertexShader = graphics::ShaderCompiler::GetInstance().CompilerShader(graphics::ShaderType::Vertex, shaderReflection, GetAssetPath(L"Shaders/HelloTriangle.hlsl"));
-		graphics::Shader pixelShader = graphics::ShaderCompiler::GetInstance().CompilerShader(graphics::ShaderType::Pixel, shaderReflection, GetAssetPath(L"Shaders/HelloTriangle.hlsl"));
+		const graphics::Shader vertexShader = graphics::ShaderCompiler::GetInstance().CompilerShader(graphics::ShaderType::Vertex, shaderReflection, GetAssetPath(L"Shaders/HelloTriangle.hlsl"));
+		const graphics::Shader pixelShader = graphics::ShaderCompiler::GetInstance().CompilerShader(graphics::ShaderType::Pixel, shaderReflection, GetAssetPath(L"Shaders/HelloTriangle.hlsl"));
 
 		// Create root signature.
 		const D3D12_VERSIONED_ROOT_SIGNATURE_DESC rootSignatureDesc
@@ -485,12 +492,28 @@ namespace nether::core
 		ThrowIfFailed(mDevice->CreateGraphicsPipelineState(&psoDesc, IID_PPV_ARGS(&mPso)));
 	}
 
+	void Engine::CreateRenderTargets()
+	{
+		CD3DX12_CPU_DESCRIPTOR_HANDLE rtvHandle(mRtvDescriptorHeap.GetDescriptorHandleForHeapStart().cpuDescriptorHandle);
+
+		for (const uint32_t backBufferIndex : std::views::iota(0u, graphics::NUMBER_OF_BACK_BUFFERS))
+		{
+			ThrowIfFailed(mSwapChain->GetBuffer(backBufferIndex, IID_PPV_ARGS(&mSwapChainBackBuffers[backBufferIndex])));
+
+			mDevice->CreateRenderTargetView(mSwapChainBackBuffers[backBufferIndex].Get(), nullptr, rtvHandle);
+			SetName(mSwapChainBackBuffers[backBufferIndex].Get(), L"SwapChain Back Buffer " + std::to_wstring(backBufferIndex));
+			rtvHandle.Offset(mRtvDescriptorHeap.GetDescriptorHandleSize());
+		}
+	}
+
 	graphics::Buffer Engine::CreateBuffer(const graphics::BufferCreationDesc& bufferCreationDesc, const void* data, const std::wstring_view bufferName)
 	{
 		// Create resource and upload data to an intermediate upload buffer.
-		const D3D12_RESOURCE_FLAGS resourceFlags{ D3D12_RESOURCE_FLAG_NONE };
+		const D3D12_RESOURCE_FLAGS resourceFlags{D3D12_RESOURCE_FLAG_NONE};
 
-		const CD3DX12_RESOURCE_DESC resourceDesc = CD3DX12_RESOURCE_DESC::Buffer(static_cast<uint64_t>(bufferCreationDesc.stride * bufferCreationDesc.componentCount), resourceFlags);
+		const uint64_t bufferSize = static_cast<uint64_t>(bufferCreationDesc.stride * bufferCreationDesc.componentCount);
+
+		const CD3DX12_RESOURCE_DESC resourceDesc = CD3DX12_RESOURCE_DESC::Buffer(bufferSize, resourceFlags);
 
 		graphics::Buffer buffer{};
 
@@ -499,6 +522,7 @@ namespace nether::core
 		case graphics::BufferUsage::IndexBuffer:
 		case graphics::BufferUsage::StructuredBuffer:
 		{
+			// Create Default 'GPU visible only' resource and implicit heap.
 			const CD3DX12_HEAP_PROPERTIES defaultHeapProperties{ D3D12_HEAP_TYPE_DEFAULT };
 			ThrowIfFailed(mDevice->CreateCommittedResource(&defaultHeapProperties, D3D12_HEAP_FLAG_NONE, &resourceDesc, D3D12_RESOURCE_STATE_COMMON, nullptr, IID_PPV_ARGS(&buffer.resource)));
 
@@ -518,7 +542,7 @@ namespace nether::core
 				.SlicePitch = bufferSize
 			};
 
-			auto commandList = mCopyCommandQueue.GetCommandList(mCurrentFrameIndex);
+			Microsoft::WRL::ComPtr<ID3D12GraphicsCommandList2> commandList = mCopyCommandQueue.GetCommandList(mCurrentFrameIndex);
 			UpdateSubresources(commandList.Get(), buffer.resource.Get(), intermediateResource.Get(), 0u, 0u, 1u, &subresourceData);
 
 			mCopyCommandQueue.ExecuteCommandLists(std::move(commandList), mCurrentFrameIndex);
@@ -543,9 +567,8 @@ namespace nether::core
 
 				mDevice->CreateShaderResourceView(buffer.resource.Get(), &srvDesc, mCbvSrvUavDescriptorHeap.GetCurrentDescriptorHandle().cpuDescriptorHandle);
 				buffer.srvIndex = mCbvSrvUavDescriptorHeap.GetCurrentDescriptorHandle().index;
+				mCbvSrvUavDescriptorHeap.OffsetCurrentDescriptorHandle();
 			}
-
-			mCbvSrvUavDescriptorHeap.OffsetCurrentDescriptorHandle();
 		}break;
 
 		case graphics::BufferUsage::ConstantBuffer:
@@ -576,19 +599,5 @@ namespace nether::core
 
 	    SetName(buffer.resource.Get(), bufferName);
 		return buffer;
-	}
-
-	void Engine::CreateRenderTargets()
-	{
-		CD3DX12_CPU_DESCRIPTOR_HANDLE rtvHandle(mRtvDescriptorHeap.GetDescriptorHandleForHeapStart().cpuDescriptorHandle);
-
-		for (uint32_t backBufferIndex : std::views::iota(0u, graphics::NUMBER_OF_BACK_BUFFERS))
-		{
-			ThrowIfFailed(mSwapChain->GetBuffer(backBufferIndex, IID_PPV_ARGS(&mSwapChainBackBuffers[backBufferIndex])));
-
-			mDevice->CreateRenderTargetView(mSwapChainBackBuffers[backBufferIndex].Get(), nullptr, rtvHandle);
-			SetName(mSwapChainBackBuffers[backBufferIndex].Get(), L"SwapChain Back Buffer");
-			rtvHandle.Offset(mRtvDescriptorHeap.GetDescriptorHandleSize());
-		}
 	}
 }

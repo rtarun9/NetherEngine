@@ -7,6 +7,8 @@
 #include "Graphics/CommandQueue.hpp"
 #include "Graphics/Shader.hpp"
 
+#include "Scene/Camera.hpp"
+
 struct alignas(256) TransformBuffer
 {
 	DirectX::XMMATRIX modelMatrix;
@@ -36,8 +38,7 @@ namespace nether::core
 		void Resize(const Uint2& clientDimensions);
 		void OnKeyAction(const uint8_t keycode, const bool isKeyDown);
 
-	public:
-
+	private:
 		// The assets directory is located under the root directory titled 'Assets'. Required as the executable can be located in different location's.
 		void FindAssetsDirectory();
 
@@ -47,13 +48,14 @@ namespace nether::core
 		void LoadCoreObjects();
 		void LoadContentAndAssets();
 
-		graphics::Buffer CreateBuffer(const graphics::BufferCreationDesc& bufferCreationDesc, const void* data, const std::wstring_view bufferName);
 
 	private:
 		void CreateRenderTargets();
+		
+		graphics::Buffer CreateBuffer(const graphics::BufferCreationDesc& bufferCreationDesc, const void* data, const std::wstring_view bufferName);
 
 	private:
-		bool mIsInitialized{ false };
+		bool mIsInitialized{false};
 
 		HWND mWindowHandle{};
 
@@ -78,7 +80,6 @@ namespace nether::core
 		Microsoft::WRL::ComPtr<IDXGISwapChain4> mSwapChain{};
 		std::array<Microsoft::WRL::ComPtr<ID3D12Resource>, graphics::NUMBER_OF_BACK_BUFFERS> mSwapChainBackBuffers{};
 		
-		// The current back buffer index.
 		uint32_t mCurrentFrameIndex{};
 
 		graphics::DescriptorHeap mRtvDescriptorHeap{};
@@ -94,6 +95,8 @@ namespace nether::core
 		D3D12_RECT mScissorRect{};
 
 		// Rendering sandbox data.
+		scene::Camera mCamera{};
+
 		graphics::Buffer mVertexPositionBuffer{};
 		graphics::Buffer mVertexColorBuffer{};
 

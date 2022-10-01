@@ -30,7 +30,7 @@ namespace nether::graphics
 		static ShaderCompiler& GetInstance();
 
 		// Returns a Shader (which holds a IDXCBlob), while the shader reflection object is a out parameter.
-		Shader CompilerShader(const ShaderType& shaderType, ShaderReflection& shaderReflection, const std::wstring_view shaderPath);
+		Shader CompilerShader(const ShaderType& shaderType, ShaderReflection& outShaderReflection, const std::wstring_view shaderPath);
 	
 	private:
 		ShaderCompiler() = default;

@@ -19,11 +19,11 @@ namespace nether::graphics
 		SetName(mCommandQueue.Get(), commandQueueName);
 
 		// Create command allocators.
-		for (uint32_t index : std::views::iota(0u, graphics::FRAMES_IN_FLIGHT))
+		for (const uint32_t index : std::views::iota(0u, FRAMES_IN_FLIGHT))
 		{
 			ThrowIfFailed(device->CreateCommandAllocator(commandListType, IID_PPV_ARGS(&mCommandAllocators[index])));
-			const std::wstring commandAllocatorName = commandQueueName.data() + std::to_wstring(index);
 
+			const std::wstring commandAllocatorName = commandQueueName.data() + std::to_wstring(index);
 			SetName(mCommandAllocators[index].Get(), commandAllocatorName);
 		}
 
@@ -32,6 +32,8 @@ namespace nether::graphics
 		const std::wstring fenceName = commandQueueName.data() + std::wstring(L" Fence");
 		SetName(mFence.Get(), fenceName);
 		
+		mFenceEvent = ::CreateEvent(nullptr, FALSE, FALSE, nullptr);
+
 		mDevice = device;
 		mCommandListType = commandListType;
 	}
@@ -86,27 +88,35 @@ namespace nether::graphics
 	{
 		if (mFence->GetCompletedValue() < frameFenceValue)
 		{
-			// Create HANDLE that will be used to block CPU thread until GPU has completed execution.
-			HANDLE fenceEvent = ::CreateEvent(nullptr, FALSE, FALSE, nullptr);
-			if (!fenceEvent)
-			{
-				ErrorMessage(L"Failed to create fence event");
-			}
-
 			// Specify that the fence event will be fired when the fence reaches the specified value.
-			ThrowIfFailed(mFence->SetEventOnCompletion(frameFenceValue, fenceEvent));
+			ThrowIfFailed(mFence->SetEventOnCompletion(frameFenceValue, mFenceEvent));
 
 			// Wait until that event has been triggered.
-
-			assert(fenceEvent && "Fence Event is NULL");
-			::WaitForSingleObject(fenceEvent, INFINITE);
-			CloseHandle(fenceEvent);
+			::WaitForSingleObject(mFenceEvent, INFINITE);
 		}
+	}
+
+	void CommandQueue::WaitForFenceValueAtFrameIndex(const uint32_t frameIndex)
+	{
+		WaitForFenceValue(mFrameFenceValues[frameIndex]);
 	}
 
 	void CommandQueue::Flush(const uint32_t frameIndex)
 	{
-		mFrameFenceValues[frameIndex] = Signal(mFrameFenceValues[frameIndex]);
-		WaitForFenceValue(mFrameFenceValues[frameIndex]);
+		const uint64_t frameFenceValue = mFrameFenceValues[frameIndex] + 1u;
+		ThrowIfFailed(mCommandQueue->Signal(mFence.Get(), frameFenceValue));
+
+		// Specify that the fence event will be fired when the fence reaches the specified value.
+		ThrowIfFailed(mFence->SetEventOnCompletion(frameFenceValue, mFenceEvent));
+
+		// Wait until that event has been triggered.
+		::WaitForSingleObject(mFenceEvent, INFINITE);
+
+		// When a command queue is flushed, all pending GPU commands have been executed.
+		// Due to this, it makes sense to 'soft reset' the frame fence values, by basically making them all equal to frameFenceValue.
+		for (const uint32_t index : std::views::iota(0u, FRAMES_IN_FLIGHT))
+		{
+			mFrameFenceValues[index] = frameFenceValue;
+		}
 	}
 }

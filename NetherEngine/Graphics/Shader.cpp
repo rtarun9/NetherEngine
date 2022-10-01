@@ -21,6 +21,7 @@ namespace nether::graphics
 			ThrowIfFailed(::DxcCreateInstance(CLSID_DxcCompiler, IID_PPV_ARGS(&mCompiler)));
 			ThrowIfFailed(mUtils->CreateDefaultIncludeHandler(&mIncludeHandler));
 
+			// Find the shader's base directory.
 			std::filesystem::path currentDirectory = std::filesystem::current_path();
 
 			while (!std::filesystem::exists(currentDirectory / "Assets"))
@@ -35,9 +36,9 @@ namespace nether::graphics
 				}
 			}
 
-			const std::filesystem::path assetsDirectory = currentDirectory / "Assets/Shaders/";
+			const std::filesystem::path shadersDirectory = currentDirectory / "Assets/Shaders/";
 
-			if (!std::filesystem::is_directory(assetsDirectory))
+			if (!std::filesystem::is_directory(shadersDirectory))
 			{
 				ErrorMessage(L"Shaders Directory that was located is not a directory!");
 			}
@@ -51,23 +52,49 @@ namespace nether::graphics
 		Microsoft::WRL::ComPtr<IDxcBlobEncoding> sourceBlob{};
 		ThrowIfFailed(mUtils->LoadFile(shaderPath.data(), nullptr, &sourceBlob));
 
-		std::wstring entryPoint{};
-		std::wstring targetProfile{};
+		const std::wstring entryPoint = [&]()
+		{
+			switch (shaderType)
+			{
+			case ShaderType::Vertex:
+			{
+				return L"VsMain";
+			}break;
 
-		switch (shaderType)
-		{
-		case ShaderType::Vertex:
-		{
-			entryPoint = L"VsMain";
-			targetProfile = L"vs_6_6";
-		}break;
+			case ShaderType::Pixel:
+			{
+				return L"PsMain";
+			}break;
 
-		case ShaderType::Pixel:
+			// Invalid case.
+			default:
+			{
+				return L"";
+			}break;
+			}
+		}();
+
+		const std::wstring targetProfile = [&]()
 		{
-			entryPoint = L"PsMain";
-			targetProfile = L"ps_6_6";
-		}break;
-		}
+			switch (shaderType)
+			{
+			case ShaderType::Vertex:
+			{
+				return L"vs_6_6";;
+			}break;
+
+			case ShaderType::Pixel:
+			{
+				return L"ps_6_6";
+			}break;
+
+			// Invalid case.
+			default:
+			{
+				return L"";
+			}break;
+			}
+		}();
 
 		std::vector<LPCWSTR> compilationArguments
 		{
@@ -100,7 +127,7 @@ namespace nether::graphics
 
 		// Compile the shader.
 		Microsoft::WRL::ComPtr<IDxcResult> compiledShaderBuffer{};
-		HRESULT hr = mCompiler->Compile(&sourceBuffer, compilationArguments.data(), static_cast<uint32_t>(compilationArguments.size()), mIncludeHandler.Get(), IID_PPV_ARGS(&compiledShaderBuffer));
+		const HRESULT hr = mCompiler->Compile(&sourceBuffer, compilationArguments.data(), static_cast<uint32_t>(compilationArguments.size()), mIncludeHandler.Get(), IID_PPV_ARGS(&compiledShaderBuffer));
 		if (FAILED(hr))
 		{
 			ErrorMessage(std::wstring(L"Failed to compile shader with path : ") + shaderPath.data());
@@ -136,10 +163,6 @@ namespace nether::graphics
 
 		// The root parameter at register c0 is the 'RenderResources' struct (holds indices for all non - CBV resources).
 		// All CBV's need to be bound based on slot based binding.
-		uint32_t srvDescriptorCount{};
-		uint32_t registerSpace{};
-		std::wstring srvShaderResourceBindingDescName{};
-
 		for (uint32_t i : std::views::iota(0u, shaderDesc.BoundResources))
 		{
 			D3D12_SHADER_INPUT_BIND_DESC shaderInputBindDesc{};

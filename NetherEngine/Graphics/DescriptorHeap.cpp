@@ -8,6 +8,7 @@ namespace nether::graphics
 	{
 		// Create descriptor heap and get descriptor size.
 
+		// Set descriptorHeapFlag and find out if descriptor is shader visible.
 		const D3D12_DESCRIPTOR_HEAP_FLAGS descriptorHeapFlags = [&]() 
 		{
 			switch (descriptorHeapType)
@@ -15,20 +16,17 @@ namespace nether::graphics
 			case D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV:
 			case D3D12_DESCRIPTOR_HEAP_TYPE_SAMPLER:
 			{
+				mIsShaderVisible = true;
 				return D3D12_DESCRIPTOR_HEAP_FLAG_SHADER_VISIBLE;
 			}break;
 
 			default:
 			{
+				mIsShaderVisible = false;
 				return D3D12_DESCRIPTOR_HEAP_FLAG_NONE;
 			}break;
 			}
 		}();
-
-		if (descriptorHeapFlags == D3D12_DESCRIPTOR_HEAP_FLAG_SHADER_VISIBLE)
-		{
-			mIsShaderVisible = true;
-		}
 
 		const D3D12_DESCRIPTOR_HEAP_DESC descriptorHeapDesc
 		{

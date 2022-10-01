@@ -2,8 +2,9 @@
 
 namespace nether
 {
-	// Common values used throught the project.
+	// Common values used through out the project.
 	constexpr uint32_t INVALID_INDEX_UINT32 = 0xFFFF'FFFF;
+	constexpr uint64_t INVALID_INDEX_UINT64 = 0XFFFF'FFFF'FFFF'FFFF;
 
 	// Data types to be used throughout the project.
 	struct Uint2

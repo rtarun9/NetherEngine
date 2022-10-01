@@ -4,7 +4,7 @@
 
 namespace nether::graphics
 {
-	// CommandQueue abstraction, which has a array of command allocators (one per frame) and holds the synchronization primitives and related function's.
+	// CommandQueue abstraction, which has a array of command allocators (one per frame in flight) and holds the synchronization primitives and its related function's.
 	// There is a queue of command list's, where we create a new list if none are present and reuse previously created ones.
 	class CommandQueue
 	{
@@ -28,10 +28,12 @@ namespace nether::graphics
 		// Create a command list with backing command allocator as mCommandAllocator[frameIndex].
 		Microsoft::WRL::ComPtr<ID3D12GraphicsCommandList2> GetCommandList(const uint32_t frameIndex);
 
+		// Return the fence value that will be set to the Fence::CompletedValue when the command queue executes the signal command.
 		uint64_t Signal(const uint64_t frameFenceValue);
 		void ExecuteCommandLists(Microsoft::WRL::ComPtr<ID3D12GraphicsCommandList2> commandList, const uint32_t frameIndex);
 		bool IsFenceComplete(const uint64_t frameFenceValue);
 		void WaitForFenceValue(const uint64_t frameFenceValue);
+		void WaitForFenceValueAtFrameIndex(const uint32_t frameIndex);
 
 		void Flush(const uint32_t frameIndex);
 
@@ -41,6 +43,7 @@ namespace nether::graphics
 
 		Microsoft::WRL::ComPtr<ID3D12Fence> mFence{};
 		std::array<uint64_t, graphics::FRAMES_IN_FLIGHT> mFrameFenceValues{0u};
+		HANDLE mFenceEvent{};
 
 		std::queue<Microsoft::WRL::ComPtr<ID3D12GraphicsCommandList2>> mCommandLists{};
 

@@ -32,14 +32,14 @@ namespace nether::core
             // Enable DPI awareness.
             ::SetThreadDpiAwarenessContext(DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2);
 
-            // Find window dimension's so that the client region dimensions are 80% of the monitor width and height.
+            // Find window dimension's so that the client region dimensions are 90% of the monitor width and height.
             const int32_t monitorWidth = ::GetSystemMetrics(SM_CXSCREEN);
             const int32_t monitorHeight = ::GetSystemMetrics(SM_CYSCREEN);
 
             const Uint2 clientDimensions 
             {
-                .x = static_cast<uint32_t>(monitorWidth * 0.8f),
-                .y = static_cast<uint32_t>(monitorHeight * 0.8f)
+                .x = static_cast<uint32_t>(monitorWidth * 0.9f),
+                .y = static_cast<uint32_t>(monitorHeight * 0.9f)
             };
 
             RECT windowRect
@@ -78,7 +78,6 @@ namespace nether::core
             {
                 mCurrentFrameTime = mClock.now();
                 const double deltaTime = std::chrono::duration_cast<std::chrono::nanoseconds>(mCurrentFrameTime - mPreviousFrameTime).count() * 1e-9;
-
                 mPreviousFrameTime = mCurrentFrameTime;
 
                 if (::PeekMessageW(&message, nullptr, 0u, 0u, PM_REMOVE))
@@ -109,7 +108,7 @@ namespace nether::core
         case WM_CREATE:
         {
             // Save the Engine* passed in to CreateWindow.
-            LPCREATESTRUCT pCreateStruct = reinterpret_cast<LPCREATESTRUCT>(lParam);
+            const LPCREATESTRUCT pCreateStruct = reinterpret_cast<LPCREATESTRUCT>(lParam);
             SetWindowLongPtr(windowHandle, GWLP_USERDATA, reinterpret_cast<LONG_PTR>(pCreateStruct->lpCreateParams));
 
             return 0;
