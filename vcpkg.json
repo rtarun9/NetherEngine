@@ -1,0 +1,13 @@
+{
+  "name": "netherengine",
+  "version": "0.1.0",
+  "supports": "windows",
+  "description": "D3D12 SandBox",
+  "dependencies": [
+    "sdl2",
+    "tinygltf",
+    "stb",
+    "directx-dxc",
+    "d3dx12"
+  ]
+}

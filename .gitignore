@@ -1,16 +1,8 @@
-# VS Files.
 *.sln
 *.vcxproj
-*.user
-*.filters
-
-# Output directories.
-.vs/
+*.vcxproj.filters
+*.vcxproj.user
 bin/
-obj/
-Output/
-Output-Int/
-
-# Nuget package dir.
-packages/
-packages.config
+bin-int/
+.vs/
+vcpkg_installed/

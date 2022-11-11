@@ -1,3 +1,4 @@
+-- A Visual studio solution.
 workspace "NetherEngine"
     configurations
     {
@@ -6,28 +7,25 @@ workspace "NetherEngine"
     }
     architecture "x64"
 
-function IncludeAndLinkThirdParty()
-    includedirs "ThirdParty/DirectXShaderCompiler/inc/"
-    libdirs "ThirdParty/DirectXShaderCompiler/bin/x64/"
-end
-
+-- A Visual studio project.
 project "NetherEngine"
     kind "ConsoleApp"
     language "C++"
     cppdialect "C++20"
 
-    objdir "Output-Int/%{cfg.buildcfg}"
-    targetdir "Output/%{cfg.buildcfg}"
+    objdir "bin-int/%{cfg.buildcfg}"
+    targetdir "bin/%{cfg.buildcfg}"
 
     files
     {
-        "NetherEngine/**.cpp",
-        "NetherEngine/**.hpp"
+        "src/**.cpp",
+        "include/**.hpp",
     }
 
     includedirs 
     { 
-        "NetherEngine/",
+        "include/",
+        "include/NetherEngine",
     }
 
     links
@@ -38,10 +36,8 @@ project "NetherEngine"
         "dxcompiler",
     }
 
-    IncludeAndLinkThirdParty()
-
     pchheader "Pch.hpp"
-    pchsource "NetherEngine/Pch.cpp"
+    pchsource "src/Pch.cpp"
 
     staticruntime "Off"
 
