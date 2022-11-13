@@ -20,6 +20,7 @@ project "NetherEngine"
     {
         "src/**.cpp",
         "include/**.hpp",
+        "shaders/**.hlsl"
     }
 
     includedirs 
@@ -40,6 +41,9 @@ project "NetherEngine"
     pchsource "src/Pch.cpp"
 
     staticruntime "Off"
+
+    filter "files:**.hlsl"
+        buildaction "None"
 
     filter "configurations:Debug"
         defines "NETHER_DEBUG"

@@ -15,10 +15,12 @@ static constexpr bool NETHER_DEUBG_MODE = false;
 #include <cstdint>
 #include <format>
 #include <span>
+#include <fstream>
 #include <ranges>
 #include <vector>
 #include <array>
 #include <unordered_map>
+#include <chrono>
 
 // Windows, DirectX12 and DXGI includes.
 #define WIN32_LEAN_AND_MEAN
@@ -28,11 +30,14 @@ static constexpr bool NETHER_DEUBG_MODE = false;
 #include <dxgi1_6.h>
 #include <dxcapi.h>
 #include <wrl.h>
-
 #include <d3dx12.h>
+
+// Math library includes.
+#include <DirectXMath.h>
 
 // Global aliases.
 template <typename T> using Comptr = Microsoft::WRL::ComPtr<T>;
+namespace math = DirectX;
 
 // Custom global includes.
 #include "NetherEngine/Utils.hpp"

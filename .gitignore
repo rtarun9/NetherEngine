@@ -6,3 +6,4 @@ bin/
 bin-int/
 .vs/
 vcpkg_installed/
+*.cso

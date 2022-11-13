@@ -10,7 +10,7 @@ BinPackArguments: false
 BinPackParameters: false
 BreakBeforeBraces: Allman
 BreakConstructorInitializers: BeforeColon
-ColumnLimit: '180'
+ColumnLimit: '120'
 CompactNamespaces: true
 ConstructorInitializerAllOnOneLineOrOnePerLine: true
 Cpp11BracedListStyle: true

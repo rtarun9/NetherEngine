@@ -62,11 +62,19 @@ inline void throwIfFailed(const HRESULT hr)
     }
 }
 
-inline void setName(ID3D12Object* const object, const std::wstring_view name)
+inline void setName(ID3D12Object* const object, const std::wstring_view name, const uint32_t index = 0u)
 {
     if constexpr (NETHER_DEUBG_MODE)
     {
-        throwIfFailed(object->SetName(name.data()));
+        if (index == 0)
+        {
+            throwIfFailed(object->SetName(name.data()));
+        }
+        else
+        {
+            const std::wstring objectName = name.data() + std::to_wstring(index);
+            throwIfFailed(object->SetName(objectName.data()));
+        }
     }
 }
 
@@ -78,5 +86,26 @@ inline void debugLog(const std::wstring_view message)
     }
 }
 
+[[nodiscard]] inline std::vector<char> readFile(const std::string_view filePath)
+{
+    using namespace std::string_literals;
+
+    // Specify that the file contains binary content, and go to the end of the file so finding its size is easy.
+    std::ifstream file(filePath.data(), std::ios::ate | std::ios::binary);
+    if (!file.is_open())
+    {
+        fatalError("Failed to read file with path : "s + filePath.data());
+    }
+
+    const size_t fileSize = static_cast<size_t>(file.tellg());
+    std::vector<char> buffer(fileSize);
+
+    file.seekg(0);
+    file.read(buffer.data(), fileSize);
+
+    file.close();
+
+    return buffer;
+}
 
 template <typename T> static inline constexpr typename std::underlying_type<T>::type EnumClassValue(const T& value) { return static_cast<std::underlying_type<T>::type>(value); }
