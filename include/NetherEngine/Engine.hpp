@@ -1,9 +1,15 @@
 #pragma once
+#pragma once
 
 struct SDL_Window;
 
 namespace nether
 {
+    struct alignas(256) TransformData
+    {
+        math::XMMATRIX mvpMatrix{};
+    };
+
     class Engine
     {
       public:
@@ -11,6 +17,7 @@ namespace nether
         void run();
 
       private:
+        void update(const float deltaTime);
         void render();
 
         void flushGPU();
@@ -83,5 +90,7 @@ namespace nether
 
         Pipeline m_pipeline{};
         Mesh m_triangleMesh{};
+
+        ConstantBuffer<TransformData> m_transformBuffer {};
     };
 }

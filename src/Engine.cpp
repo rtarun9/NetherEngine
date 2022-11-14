@@ -35,6 +35,9 @@ namespace nether
         debugLog(L"Initialized engine.");
 
         // Main event loop.
+        std::chrono::high_resolution_clock clock{};
+        std::chrono::high_resolution_clock::time_point previousFrameTime{};
+
         bool quit{false};
         while (!quit)
         {
@@ -53,39 +56,42 @@ namespace nether
                 }
             }
 
+            const auto currentFrameTime = clock.now();
+            const float deltaTime = static_cast<float>((currentFrameTime - previousFrameTime).count());
+            previousFrameTime = currentFrameTime;
+
+            update(deltaTime);
             render();
+
+            m_frameCount++;
         }
     }
+
+    void Engine::update(const float deltaTime) {}
 
     void Engine::render()
     {
         // Reset the command list and the command allocator to add new commands.
         throwIfFailed(getCurrentFrameResources().commandAllocator->Reset());
-        throwIfFailed(
-            getCurrentFrameResources().commandList->Reset(getCurrentFrameResources().commandAllocator.Get(), nullptr));
+        throwIfFailed(getCurrentFrameResources().commandList->Reset(getCurrentFrameResources().commandAllocator.Get(), nullptr));
 
         // Alias for the command list.
         Comptr<ID3D12GraphicsCommandList2>& cmd = getCurrentFrameResources().commandList;
 
         // Set pipeline state.
-        constexpr std::array<ID3D12DescriptorHeap*, 1u> shaderVisibleDescriptorHeaps{};
+        const std::array<ID3D12DescriptorHeap*, 1u> shaderVisibleDescriptorHeaps{};
 
         cmd->SetGraphicsRootSignature(m_pipeline.rootSignature.Get());
         cmd->SetPipelineState(m_pipeline.pipelineState.Get());
 
         // Transition back buffer from presentable state to writable (renderable) state.
         const CD3DX12_RESOURCE_BARRIER presentationToRenderTargetBarrier =
-            CD3DX12_RESOURCE_BARRIER::Transition(m_backBuffers[m_frameIndex].Get(),
-                                                 D3D12_RESOURCE_STATE_PRESENT,
-                                                 D3D12_RESOURCE_STATE_RENDER_TARGET);
+            CD3DX12_RESOURCE_BARRIER::Transition(m_backBuffers[m_frameIndex].Get(), D3D12_RESOURCE_STATE_PRESENT, D3D12_RESOURCE_STATE_RENDER_TARGET);
 
         cmd->ResourceBarrier(1u, &presentationToRenderTargetBarrier);
 
         // Setup render targets and depth stencil views.
-        const CD3DX12_CPU_DESCRIPTOR_HANDLE rtvHandle(m_rtvDescriptorHeap->GetCPUDescriptorHandleForHeapStart(),
-                                                      m_frameIndex,
-                                                      m_rtvDescriptorSize);
-
+        const CD3DX12_CPU_DESCRIPTOR_HANDLE rtvHandle(m_rtvDescriptorHeap->GetCPUDescriptorHandleForHeapStart(), m_frameIndex, m_rtvDescriptorSize);
         const CD3DX12_CPU_DESCRIPTOR_HANDLE dsvHandle(m_dsvDescriptorHeap->GetCPUDescriptorHandleForHeapStart());
 
         constexpr std::array<float, 4> clearColor{0.1f, 0.1f, 0.1f, 1.0f};
@@ -98,14 +104,14 @@ namespace nether
         cmd->RSSetScissorRects(1u, &m_scissorRect);
         cmd->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
 
-        cmd->IASetVertexBuffers(0u, 1u, &m_triangleMesh.vertexBufferView);
+        cmd->IASetVertexBuffers(0u, 1u, &m_triangleMesh.vertexBuffer.vertexBufferView);
+        cmd->IASetIndexBuffer(&m_triangleMesh.indexBuffer.indexBufferView);
+        cmd->SetGraphicsRoot32BitConstants(0u, 16u, &m_transformBuffer.data, 0u);
 
-        cmd->DrawInstanced(3u, 1u, 0u, 0u);
+        cmd->DrawIndexedInstanced(36u, 1u, 0u, 0u, 0u);
 
         const CD3DX12_RESOURCE_BARRIER renderTargetToPresentationBarrier =
-            CD3DX12_RESOURCE_BARRIER::Transition(m_backBuffers[m_frameIndex].Get(),
-                                                 D3D12_RESOURCE_STATE_RENDER_TARGET,
-                                                 D3D12_RESOURCE_STATE_PRESENT);
+            CD3DX12_RESOURCE_BARRIER::Transition(m_backBuffers[m_frameIndex].Get(), D3D12_RESOURCE_STATE_RENDER_TARGET, D3D12_RESOURCE_STATE_PRESENT);
         cmd->ResourceBarrier(1u, &renderTargetToPresentationBarrier);
 
         throwIfFailed(cmd->Close());
@@ -168,12 +174,7 @@ namespace nether
             .y = static_cast<uint32_t>(monitorHeight * 0.85f),
         };
 
-        m_window = SDL_CreateWindow("LunarEngine",
-                                    SDL_WINDOWPOS_CENTERED,
-                                    SDL_WINDOWPOS_CENTERED,
-                                    m_windowDimensions.x,
-                                    m_windowDimensions.y,
-                                    SDL_WINDOW_ALLOW_HIGHDPI);
+        m_window = SDL_CreateWindow("LunarEngine", SDL_WINDOWPOS_CENTERED, SDL_WINDOWPOS_CENTERED, m_windowDimensions.x, m_windowDimensions.y, SDL_WINDOW_ALLOW_HIGHDPI);
         if (!m_window)
         {
             fatalError("Failed to create SDL2 window.");
@@ -219,8 +220,7 @@ namespace nether
 
         // Select the highest performance adapter and display its description (adapter represents the display subsystem,
         // i.e GPU, video memory, etc).
-        throwIfFailed(
-            m_factory->EnumAdapterByGpuPreference(0u, DXGI_GPU_PREFERENCE_HIGH_PERFORMANCE, IID_PPV_ARGS(&m_adapter)));
+        throwIfFailed(m_factory->EnumAdapterByGpuPreference(0u, DXGI_GPU_PREFERENCE_HIGH_PERFORMANCE, IID_PPV_ARGS(&m_adapter)));
 
         DXGI_ADAPTER_DESC1 adapterDesc{};
         throwIfFailed(m_adapter->GetDesc1(&adapterDesc));
@@ -297,9 +297,7 @@ namespace nether
         for (const uint32_t frameIndex : std::views::iota(0u, FRAME_COUNT))
         {
             // Create the command allocator (i.e the backing memory store for GPU commands recorded via command lists).
-            throwIfFailed(
-                m_device->CreateCommandAllocator(D3D12_COMMAND_LIST_TYPE_DIRECT,
-                                                 IID_PPV_ARGS(&m_frameResources[frameIndex].commandAllocator)));
+            throwIfFailed(m_device->CreateCommandAllocator(D3D12_COMMAND_LIST_TYPE_DIRECT, IID_PPV_ARGS(&m_frameResources[frameIndex].commandAllocator)));
             setName(m_frameResources[frameIndex].commandAllocator.Get(), L"Direct command allocator", frameIndex);
 
             // Create the command list. Used for recording GPU commands.
@@ -324,16 +322,11 @@ namespace nether
         throwIfFailed(m_device->CreateCommandQueue(&copyCommandQueueDesc, IID_PPV_ARGS(&m_copyCommandQueue)));
         setName(m_copyCommandQueue.Get(), L"Copy command queue");
 
-        throwIfFailed(
-            m_device->CreateCommandAllocator(D3D12_COMMAND_LIST_TYPE_COPY, IID_PPV_ARGS(&m_copyCommandAllocator)));
+        throwIfFailed(m_device->CreateCommandAllocator(D3D12_COMMAND_LIST_TYPE_COPY, IID_PPV_ARGS(&m_copyCommandAllocator)));
         setName(m_copyCommandAllocator.Get(), L"Copy command allocator");
 
         // Create the command list. Used for recording GPU commands.
-        throwIfFailed(m_device->CreateCommandList(0u,
-                                                  D3D12_COMMAND_LIST_TYPE_COPY,
-                                                  m_copyCommandAllocator.Get(),
-                                                  nullptr,
-                                                  IID_PPV_ARGS(&m_copyCommandList)));
+        throwIfFailed(m_device->CreateCommandList(0u, D3D12_COMMAND_LIST_TYPE_COPY, m_copyCommandAllocator.Get(), nullptr, IID_PPV_ARGS(&m_copyCommandList)));
 
         setName(m_copyCommandList.Get(), L"Copy command list");
     }
@@ -383,12 +376,7 @@ namespace nether
         };
 
         Comptr<IDXGISwapChain1> swapchain{};
-        throwIfFailed(m_factory->CreateSwapChainForHwnd(m_directCommandQueue.Get(),
-                                                        m_windowHandle,
-                                                        &swapchainDesc,
-                                                        nullptr,
-                                                        nullptr,
-                                                        &swapchain));
+        throwIfFailed(m_factory->CreateSwapChainForHwnd(m_directCommandQueue.Get(), m_windowHandle, &swapchainDesc, nullptr, nullptr, &swapchain));
         throwIfFailed(swapchain.As(&m_swapchain));
 
         CD3DX12_CPU_DESCRIPTOR_HANDLE rtvHandle(m_rtvDescriptorHeap->GetCPUDescriptorHandleForHeapStart());
@@ -443,8 +431,7 @@ namespace nether
             },
         };
 
-        const D3D12_CPU_DESCRIPTOR_HANDLE dsvDescriptorHandle =
-            m_dsvDescriptorHeap->GetCPUDescriptorHandleForHeapStart();
+        const D3D12_CPU_DESCRIPTOR_HANDLE dsvDescriptorHandle = m_dsvDescriptorHeap->GetCPUDescriptorHandleForHeapStart();
 
         m_device->CreateDepthStencilView(m_depthStencilTexture.Get(), &dsvDesc, dsvDescriptorHandle);
     }
@@ -452,14 +439,24 @@ namespace nether
     void Engine::initPipelines()
     {
         // Setup the root signature. RS specifies what is the layout that resources are used in the shaders.
-        // Empty for now.
+        // One cbv inline descriptor.
+        const D3D12_ROOT_PARAMETER1 transformBufferRootParameter = {
+            .ParameterType = D3D12_ROOT_PARAMETER_TYPE_32BIT_CONSTANTS,
+            .Constants =
+                {
+                    .ShaderRegister = 0u,
+                    .RegisterSpace = 0u,
+                    .Num32BitValues = 16u,
+                },
+            .ShaderVisibility = D3D12_SHADER_VISIBILITY_VERTEX,
+        };
 
         const D3D12_VERSIONED_ROOT_SIGNATURE_DESC rootSignaureDesc = {
             .Version = D3D_ROOT_SIGNATURE_VERSION_1_1,
             .Desc_1_1 =
                 {
-                    .NumParameters = 0u,
-                    .pParameters = nullptr,
+                    .NumParameters = 1u,
+                    .pParameters = &transformBufferRootParameter,
                     .NumStaticSamplers = 0u,
                     .pStaticSamplers = nullptr,
                     .Flags = D3D12_ROOT_SIGNATURE_FLAG_ALLOW_INPUT_ASSEMBLER_INPUT_LAYOUT,
@@ -477,10 +474,7 @@ namespace nether
             fatalError(errorMessage);
         }
 
-        throwIfFailed(m_device->CreateRootSignature(0u,
-                                                    rootSignatureBlob->GetBufferPointer(),
-                                                    rootSignatureBlob->GetBufferSize(),
-                                                    IID_PPV_ARGS(&m_pipeline.rootSignature)));
+        throwIfFailed(m_device->CreateRootSignature(0u, rootSignatureBlob->GetBufferPointer(), rootSignatureBlob->GetBufferSize(), IID_PPV_ARGS(&m_pipeline.rootSignature)));
         setName(m_pipeline.rootSignature.Get(), L"Root signature");
 
         // Setup shaders.
@@ -497,7 +491,8 @@ namespace nether
         };
 
         // Setup graphics pipeline state.
-        const CD3DX12_RASTERIZER_DESC defaultRasterizerDesc(D3D12_DEFAULT);
+        CD3DX12_RASTERIZER_DESC defaultRasterizerDesc(D3D12_DEFAULT);
+        defaultRasterizerDesc.FrontCounterClockwise = false;
 
         // Setup input layout.
         constexpr std::array<D3D12_INPUT_ELEMENT_DESC, 2u> inputElementDescs = {
@@ -552,8 +547,7 @@ namespace nether
             .Flags = D3D12_PIPELINE_STATE_FLAG_NONE,
         };
 
-        throwIfFailed(
-            m_device->CreateGraphicsPipelineState(&graphicsPipelineStateDesc, IID_PPV_ARGS(&m_pipeline.pipelineState)));
+        throwIfFailed(m_device->CreateGraphicsPipelineState(&graphicsPipelineStateDesc, IID_PPV_ARGS(&m_pipeline.pipelineState)));
         setName(m_pipeline.pipelineState.Get(), L"Pipeline State");
     }
 
@@ -565,27 +559,18 @@ namespace nether
             math::XMFLOAT3 color{};
         };
 
-        std::array<Vertex, 3> triangleVertices{
-            Vertex{
-                .position = {-0.5f, -0.5f, 0.0f},
-                .color =
-                    {
-                        1.0f,
-                        0.0f,
-                        0.0f,
-                    },
-            },
-            Vertex{
-                .position = {0.0f, 0.5f, 0.0f},
-                .color = {0.0f, 1.0f, 0.0f},
-            },
-            Vertex{
-                .position = {0.5f, -0.5f, 0.0f},
-                .color = {0.0f, 0.0f, 1.0f},
-            },
+        constexpr std::array<Vertex, 8> triangleVertices{
+            Vertex{.position = math::XMFLOAT3(-1.0f, -1.0f, -1.0f), .color = math::XMFLOAT3(0.0f, 0.0f, 0.0f)},
+            Vertex{.position = math::XMFLOAT3(-1.0f, 1.0f, -1.0f), .color = math::XMFLOAT3(0.0f, 1.0f, 0.0f)},
+            Vertex{.position = math::XMFLOAT3(1.0f, 1.0f, -1.0f), .color = math::XMFLOAT3(1.0f, 1.0f, 0.0f)},
+            Vertex{.position = math::XMFLOAT3(1.0f, -1.0f, -1.0f), .color = math::XMFLOAT3(1.0f, 0.0f, 0.0f)},
+            Vertex{.position = math::XMFLOAT3(-1.0f, -1.0f, 1.0f), .color = math::XMFLOAT3(0.0f, 0.0f, 1.0f)},
+            Vertex{.position = math::XMFLOAT3(-1.0f, 1.0f, 1.0f), .color = math::XMFLOAT3(0.0f, 1.0f, 1.0f)},
+            Vertex{.position = math::XMFLOAT3(1.0f, 1.0f, 1.0f), .color = math::XMFLOAT3(1.0f, 1.0f, 1.0f)},
+            Vertex{.position = math::XMFLOAT3(1.0f, -1.0f, 1.0f), .color = math::XMFLOAT3(1.0f, 0.0f, 1.0f)},
         };
 
-        const uint32_t vertexBufferSize = static_cast<uint32_t>(sizeof(Vertex) * triangleVertices.size());
+        constexpr uint32_t vertexBufferSize = static_cast<uint32_t>(sizeof(Vertex) * triangleVertices.size());
 
         const D3D12_RESOURCE_DESC vertexBufferResourceDesc = {
             .Dimension = D3D12_RESOURCE_DIMENSION_BUFFER,
@@ -601,15 +586,64 @@ namespace nether
 
         };
 
-        m_triangleMesh.vertexBuffer = createBuffer(vertexBufferResourceDesc,
-                                                   reinterpret_cast<std::byte*>(triangleVertices.data()),
-                                                   L"Triangle vertex buffer");
+        m_triangleMesh.vertexBuffer.buffer = createBuffer(vertexBufferResourceDesc, reinterpret_cast<const std::byte*>(triangleVertices.data()), L"Triangle vertex buffer");
 
-        m_triangleMesh.vertexBufferView = {
-            .BufferLocation = m_triangleMesh.vertexBuffer->GetGPUVirtualAddress(),
+        m_triangleMesh.vertexBuffer.vertexBufferView = {
+            .BufferLocation = m_triangleMesh.vertexBuffer.buffer->GetGPUVirtualAddress(),
             .SizeInBytes = vertexBufferSize,
             .StrideInBytes = sizeof(Vertex),
         };
+
+        m_triangleMesh.vertexBuffer.verticesCount = static_cast<uint32_t>(triangleVertices.size());
+
+        constexpr std::array<uint32_t, 36> triangleIndices{0, 1, 2, 0, 2, 3, 4, 6, 5, 4, 7, 6, 4, 5, 1, 4, 1, 0, 3, 2, 6, 3, 6, 7, 1, 5, 6, 1, 6, 2, 4, 0, 3, 4, 3, 7};
+        constexpr uint32_t indexBufferSize = static_cast<uint32_t>(sizeof(uint32_t) * triangleIndices.size());
+
+        const D3D12_RESOURCE_DESC indexBufferResourceDesc = {
+            .Dimension = D3D12_RESOURCE_DIMENSION_BUFFER,
+            .Alignment = 0u,
+            .Width = indexBufferSize,
+            .Height = 1u,
+            .DepthOrArraySize = 1u,
+            .MipLevels = 1u,
+            .Format = DXGI_FORMAT_UNKNOWN,
+            .SampleDesc = {1u, 0u},
+            .Layout = D3D12_TEXTURE_LAYOUT_ROW_MAJOR,
+            .Flags = D3D12_RESOURCE_FLAG_NONE,
+        };
+
+        m_triangleMesh.indexBuffer.buffer = createBuffer(indexBufferResourceDesc, reinterpret_cast<const std::byte*>(triangleIndices.data()), L"Triangle index buffer");
+        m_triangleMesh.indexBuffer.indexBufferView = {
+            .BufferLocation = m_triangleMesh.indexBuffer.buffer->GetGPUVirtualAddress(),
+            .SizeInBytes = indexBufferSize,
+            .Format = DXGI_FORMAT_R32_UINT,
+        };
+
+        const D3D12_RESOURCE_DESC transformBufferResourceDesc = {
+            .Dimension = D3D12_RESOURCE_DIMENSION_BUFFER,
+            .Alignment = 0u,
+            .Width = sizeof(TransformData),
+            .Height = 1u,
+            .DepthOrArraySize = 1u,
+            .MipLevels = 1u,
+            .Format = DXGI_FORMAT_UNKNOWN,
+            .SampleDesc = {1u, 0u},
+            .Layout = D3D12_TEXTURE_LAYOUT_ROW_MAJOR,
+            .Flags = D3D12_RESOURCE_FLAG_NONE,
+        };
+
+        m_transformBuffer.buffer = createBuffer(transformBufferResourceDesc, nullptr, L"Transform buffer");
+
+        static const math::XMVECTOR eyePosition = math::XMVectorSet(0.0f, 0.0f, -10.0f, 1.0f);
+        static const math::XMVECTOR targetPosition = math::XMVectorSet(0.0f, 0.0f, 0.0f, 1.0f);
+        static const math::XMVECTOR upDirection = math::XMVectorSet(0.0f, 1.0f, 0.0f, 0.0f);
+
+        m_transformBuffer.data = {
+            math::XMMatrixLookAtLH(eyePosition, targetPosition, upDirection) *
+                math::XMMatrixPerspectiveFovLH(math::XMConvertToRadians(45.0f), (float)m_windowDimensions.x / (float)m_windowDimensions.y, 0.1f, 100.0f),
+        };
+
+        m_transformBuffer.update();
     }
 
     void Engine::uploadBuffers()
@@ -626,9 +660,7 @@ namespace nether
         }
     }
 
-    Comptr<ID3D12Resource> Engine::createBuffer(const D3D12_RESOURCE_DESC& bufferResourceDesc,
-                                                const std::byte* data,
-                                                const std::wstring_view bufferName)
+    Comptr<ID3D12Resource> Engine::createBuffer(const D3D12_RESOURCE_DESC& bufferResourceDesc, const std::byte* data, const std::wstring_view bufferName)
     {
         Comptr<ID3D12Resource> buffer{};
 
@@ -637,27 +669,9 @@ namespace nether
             // This buffer will have CPU / GPU access. Mostly used for constant buffers.
             const CD3DX12_HEAP_PROPERTIES uploadHeapProperties(D3D12_HEAP_TYPE_UPLOAD);
 
-            throwIfFailed(m_device->CreateCommittedResource(&uploadHeapProperties,
-                                                            D3D12_HEAP_FLAG_NONE,
-                                                            &bufferResourceDesc,
-                                                            D3D12_RESOURCE_STATE_GENERIC_READ,
-                                                            nullptr,
-                                                            IID_PPV_ARGS(&buffer)));
-
-            // Copy data from data ptr passed in to the CPU / GPU accessible buffer.
-            uint8_t* bufferPointer{};
-
-            // Set null read range, as we don't intend on reading from this resource on the CPU.
-            const D3D12_RANGE readRange = {
-                .Begin = 0u,
-                .End = 0u,
-            };
-
-            const uint32_t bufferSize = static_cast<uint32_t>(bufferResourceDesc.Width * bufferResourceDesc.Height);
-
-            throwIfFailed(buffer->Map(0u, &readRange, reinterpret_cast<void**>(&bufferPointer)));
-            std::memcpy(bufferPointer, data, bufferSize);
-            buffer->Unmap(0u, nullptr);
+            throwIfFailed(
+                m_device
+                    ->CreateCommittedResource(&uploadHeapProperties, D3D12_HEAP_FLAG_NONE, &bufferResourceDesc, D3D12_RESOURCE_STATE_GENERIC_READ, nullptr, IID_PPV_ARGS(&buffer)));
         }
         else
         {
@@ -665,12 +679,8 @@ namespace nether
             // accesible state. The data from this buffer will be copied into the GPU only buffer.
             const CD3DX12_HEAP_PROPERTIES defaultHeapProperties(D3D12_HEAP_TYPE_DEFAULT);
 
-            throwIfFailed(m_device->CreateCommittedResource(&defaultHeapProperties,
-                                                            D3D12_HEAP_FLAG_NONE,
-                                                            &bufferResourceDesc,
-                                                            D3D12_RESOURCE_STATE_COMMON,
-                                                            nullptr,
-                                                            IID_PPV_ARGS(&buffer)));
+            throwIfFailed(
+                m_device->CreateCommittedResource(&defaultHeapProperties, D3D12_HEAP_FLAG_NONE, &bufferResourceDesc, D3D12_RESOURCE_STATE_COMMON, nullptr, IID_PPV_ARGS(&buffer)));
 
             Comptr<ID3D12Resource> uploadBuffer{};
             const CD3DX12_HEAP_PROPERTIES uploadHeapProperties(D3D12_HEAP_TYPE_UPLOAD);

@@ -15,6 +15,7 @@ static constexpr bool NETHER_DEUBG_MODE = false;
 #include <cstdint>
 #include <format>
 #include <span>
+#include <source_location>
 #include <fstream>
 #include <ranges>
 #include <vector>

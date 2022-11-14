@@ -41,11 +41,16 @@ inline std::string hresultToString(const HRESULT hr)
     return std::string(s_str);
 }
 
-inline void fatalError(const std::wstring_view message)
+inline void fatalError(const std::wstring_view message, const std::source_location source_location = std::source_location::current())
 {
+    const auto errorMessage = std::string(wStringToString(message) + std::format(" Source Location data : File Name -> {}, Function Name -> {}, Line Number -> {}, Column -> {}",
+                                                            source_location.file_name(),
+                                                            source_location.function_name(),
+                                                            source_location.line(),
+                                                            source_location.column()));
+
     ::MessageBoxW(nullptr, message.data(), L"ERROR!", MB_OK | MB_ICONEXCLAMATION);
-    const std::string errorMessageStr = wStringToString(message);
-    throw std::runtime_error(errorMessageStr);
+    throw std::runtime_error(errorMessage);
 }
 
 inline void fatalError(const std::string_view message)
