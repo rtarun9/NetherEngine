@@ -2,6 +2,8 @@
 
 #include "Engine.hpp"
 
+#include "ShaderCompiler.hpp"
+
 #include <SDL2/SDL.h>
 #include <SDL2/SDL_syswm.h>
 
@@ -106,7 +108,7 @@ namespace nether
 
         cmd->IASetVertexBuffers(0u, 1u, &m_triangleMesh.vertexBuffer.vertexBufferView);
         cmd->IASetIndexBuffer(&m_triangleMesh.indexBuffer.indexBufferView);
-        cmd->SetGraphicsRoot32BitConstants(0u, 16u, &m_transformBuffer.data, 0u);
+        cmd->SetGraphicsRootConstantBufferView(0u, m_transformBuffer.buffer->GetGPUVirtualAddress());
 
         cmd->DrawIndexedInstanced(36u, 1u, 0u, 0u, 0u);
 
@@ -279,6 +281,19 @@ namespace nether
         setName(m_dsvDescriptorHeap.Get(), L"DSV descriptor heap");
 
         m_dsvDescriptorSize = m_device->GetDescriptorHandleIncrementSize(D3D12_DESCRIPTOR_HEAP_TYPE_DSV);
+
+        const D3D12_DESCRIPTOR_HEAP_DESC cbvSrvUavDescriptorHeapDesc = {
+            .Type = D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV,
+            .NumDescriptors = 5u,
+            .Flags = D3D12_DESCRIPTOR_HEAP_FLAG_SHADER_VISIBLE,
+            .NodeMask = 0u,
+        };
+
+        throwIfFailed(m_device->CreateDescriptorHeap(&cbvSrvUavDescriptorHeapDesc, IID_PPV_ARGS(&m_cbvSrvUavDescriptorHeap)));
+        setName(m_cbvSrvUavDescriptorHeap.Get(), L"CBV SRV UAV descriptor heap");
+
+        m_cbvSrvUavDescriptorSize = m_device->GetDescriptorHandleIncrementSize(D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV);
+        m_currentCbvSrvUavDescriptorHeapHandle = m_cbvSrvUavDescriptorHeap->GetCPUDescriptorHandleForHeapStart();
     }
 
     void Engine::initCommandObjects()
@@ -441,12 +456,12 @@ namespace nether
         // Setup the root signature. RS specifies what is the layout that resources are used in the shaders.
         // One cbv inline descriptor.
         const D3D12_ROOT_PARAMETER1 transformBufferRootParameter = {
-            .ParameterType = D3D12_ROOT_PARAMETER_TYPE_32BIT_CONSTANTS,
-            .Constants =
+            .ParameterType = D3D12_ROOT_PARAMETER_TYPE_CBV,
+            .Descriptor =
                 {
                     .ShaderRegister = 0u,
                     .RegisterSpace = 0u,
-                    .Num32BitValues = 16u,
+                    .Flags = D3D12_ROOT_DESCRIPTOR_FLAG_NONE,
                 },
             .ShaderVisibility = D3D12_SHADER_VISIBILITY_VERTEX,
         };
@@ -478,16 +493,18 @@ namespace nether
         setName(m_pipeline.rootSignature.Get(), L"Root signature");
 
         // Setup shaders.
-        const std::vector<char> vertexShaderContents = readFile("shaders/TriangleShaderVS.cso");
-        D3D12_SHADER_BYTECODE vertexShaderByteCode = {
-            .pShaderBytecode = vertexShaderContents.data(),
-            .BytecodeLength = static_cast<uint32_t>(vertexShaderContents.size()),
+        const Shader vertexShader = ShaderCompiler::compile(ShaderTypes::vertex, L"shaders/TriangleShader.hlsl");
+        const Shader pixelShader = ShaderCompiler::compile(ShaderTypes::pixel, L"shaders/TriangleShader.hlsl");
+
+        const D3D12_SHADER_BYTECODE vertexShaderByteCode = {
+            .pShaderBytecode = vertexShader.shaderBlob->GetBufferPointer(),
+            .BytecodeLength = vertexShader.shaderBlob->GetBufferSize(),
         };
 
-        const std::vector<char> pixelShaderContents = readFile("shaders/TriangleShaderPS.cso");
-        D3D12_SHADER_BYTECODE pixelShaderByteCode = {
-            .pShaderBytecode = pixelShaderContents.data(),
-            .BytecodeLength = static_cast<uint32_t>(pixelShaderContents.size()),
+        const D3D12_SHADER_BYTECODE pixelShaderByteCode = {
+            .pShaderBytecode = pixelShader.shaderBlob->GetBufferPointer(),
+            .BytecodeLength = pixelShader.shaderBlob->GetBufferSize(),
+
         };
 
         // Setup graphics pipeline state.
@@ -553,12 +570,6 @@ namespace nether
 
     void Engine::initMeshes()
     {
-        struct Vertex
-        {
-            math::XMFLOAT3 position{};
-            math::XMFLOAT3 color{};
-        };
-
         constexpr std::array<Vertex, 8> triangleVertices{
             Vertex{.position = math::XMFLOAT3(-1.0f, -1.0f, -1.0f), .color = math::XMFLOAT3(0.0f, 0.0f, 0.0f)},
             Vertex{.position = math::XMFLOAT3(-1.0f, 1.0f, -1.0f), .color = math::XMFLOAT3(0.0f, 1.0f, 0.0f)},
@@ -572,67 +583,14 @@ namespace nether
 
         constexpr uint32_t vertexBufferSize = static_cast<uint32_t>(sizeof(Vertex) * triangleVertices.size());
 
-        const D3D12_RESOURCE_DESC vertexBufferResourceDesc = {
-            .Dimension = D3D12_RESOURCE_DIMENSION_BUFFER,
-            .Alignment = 0u,
-            .Width = vertexBufferSize,
-            .Height = 1u,
-            .DepthOrArraySize = 1u,
-            .MipLevels = 1u,
-            .Format = DXGI_FORMAT_UNKNOWN,
-            .SampleDesc = {1u, 0u},
-            .Layout = D3D12_TEXTURE_LAYOUT_ROW_MAJOR,
-            .Flags = D3D12_RESOURCE_FLAG_NONE,
-
-        };
-
-        m_triangleMesh.vertexBuffer.buffer = createBuffer(vertexBufferResourceDesc, reinterpret_cast<const std::byte*>(triangleVertices.data()), L"Triangle vertex buffer");
-
-        m_triangleMesh.vertexBuffer.vertexBufferView = {
-            .BufferLocation = m_triangleMesh.vertexBuffer.buffer->GetGPUVirtualAddress(),
-            .SizeInBytes = vertexBufferSize,
-            .StrideInBytes = sizeof(Vertex),
-        };
-
-        m_triangleMesh.vertexBuffer.verticesCount = static_cast<uint32_t>(triangleVertices.size());
+        m_triangleMesh.vertexBuffer = createVertexBuffer(reinterpret_cast<const std::byte*>(triangleVertices.data()), vertexBufferSize, L"Triangle Vertex Buffer");
 
         constexpr std::array<uint32_t, 36> triangleIndices{0, 1, 2, 0, 2, 3, 4, 6, 5, 4, 7, 6, 4, 5, 1, 4, 1, 0, 3, 2, 6, 3, 6, 7, 1, 5, 6, 1, 6, 2, 4, 0, 3, 4, 3, 7};
         constexpr uint32_t indexBufferSize = static_cast<uint32_t>(sizeof(uint32_t) * triangleIndices.size());
 
-        const D3D12_RESOURCE_DESC indexBufferResourceDesc = {
-            .Dimension = D3D12_RESOURCE_DIMENSION_BUFFER,
-            .Alignment = 0u,
-            .Width = indexBufferSize,
-            .Height = 1u,
-            .DepthOrArraySize = 1u,
-            .MipLevels = 1u,
-            .Format = DXGI_FORMAT_UNKNOWN,
-            .SampleDesc = {1u, 0u},
-            .Layout = D3D12_TEXTURE_LAYOUT_ROW_MAJOR,
-            .Flags = D3D12_RESOURCE_FLAG_NONE,
-        };
+        m_triangleMesh.indexBuffer = createIndexBuffer(reinterpret_cast<const std::byte*>(triangleIndices.data()), indexBufferSize, L"Triangle Index Buffer");
 
-        m_triangleMesh.indexBuffer.buffer = createBuffer(indexBufferResourceDesc, reinterpret_cast<const std::byte*>(triangleIndices.data()), L"Triangle index buffer");
-        m_triangleMesh.indexBuffer.indexBufferView = {
-            .BufferLocation = m_triangleMesh.indexBuffer.buffer->GetGPUVirtualAddress(),
-            .SizeInBytes = indexBufferSize,
-            .Format = DXGI_FORMAT_R32_UINT,
-        };
-
-        const D3D12_RESOURCE_DESC transformBufferResourceDesc = {
-            .Dimension = D3D12_RESOURCE_DIMENSION_BUFFER,
-            .Alignment = 0u,
-            .Width = sizeof(TransformData),
-            .Height = 1u,
-            .DepthOrArraySize = 1u,
-            .MipLevels = 1u,
-            .Format = DXGI_FORMAT_UNKNOWN,
-            .SampleDesc = {1u, 0u},
-            .Layout = D3D12_TEXTURE_LAYOUT_ROW_MAJOR,
-            .Flags = D3D12_RESOURCE_FLAG_NONE,
-        };
-
-        m_transformBuffer.buffer = createBuffer(transformBufferResourceDesc, nullptr, L"Transform buffer");
+        m_transformBuffer = createConstantBuffer<TransformData>(L"Transform buffer");
 
         static const math::XMVECTOR eyePosition = math::XMVectorSet(0.0f, 0.0f, -10.0f, 1.0f);
         static const math::XMVECTOR targetPosition = math::XMVectorSet(0.0f, 0.0f, 0.0f, 1.0f);
@@ -658,6 +616,8 @@ namespace nether
             throwIfFailed(m_copyFence->SetEventOnCompletion(1u, m_fenceEvent));
             ::WaitForSingleObject(m_fenceEvent, INFINITE);
         }
+
+        m_uploadBuffers.clear();
     }
 
     Comptr<ID3D12Resource> Engine::createBuffer(const D3D12_RESOURCE_DESC& bufferResourceDesc, const std::byte* data, const std::wstring_view bufferName)
@@ -716,5 +676,65 @@ namespace nether
         setName(buffer.Get(), bufferName);
 
         return buffer;
+    }
+
+    VertexBuffer Engine::createVertexBuffer(const std::byte* data, const uint32_t bufferSize, const std::wstring_view vertexBufferName)
+    {
+        VertexBuffer vertexBuffer{};
+
+        // Setup the resource desc for buffer creation.
+        const D3D12_RESOURCE_DESC vertexBufferResourceDesc = {
+            .Dimension = D3D12_RESOURCE_DIMENSION_BUFFER,
+            .Alignment = 0u,
+            .Width = bufferSize,
+            .Height = 1u,
+            .DepthOrArraySize = 1u,
+            .MipLevels = 1u,
+            .Format = DXGI_FORMAT_UNKNOWN,
+            .SampleDesc = {1u, 0u},
+            .Layout = D3D12_TEXTURE_LAYOUT_ROW_MAJOR,
+            .Flags = D3D12_RESOURCE_FLAG_NONE,
+        };
+
+        vertexBuffer.buffer = createBuffer(vertexBufferResourceDesc, data, vertexBufferName);
+
+        vertexBuffer.vertexBufferView = {
+            .BufferLocation = vertexBuffer.buffer->GetGPUVirtualAddress(),
+            .SizeInBytes = bufferSize,
+            .StrideInBytes = sizeof(Vertex),
+        };
+
+        vertexBuffer.verticesCount = static_cast<uint32_t>(bufferSize / sizeof(Vertex));
+
+        return vertexBuffer;
+    }
+
+    IndexBuffer Engine::createIndexBuffer(const std::byte* data, const uint32_t bufferSize, const std::wstring_view indexBufferName)
+    {
+        IndexBuffer indexBuffer{};
+
+        // Setup the resource desc for buffer creation.
+        const D3D12_RESOURCE_DESC indexBufferResourceDesc = {
+            .Dimension = D3D12_RESOURCE_DIMENSION_BUFFER,
+            .Alignment = 0u,
+            .Width = bufferSize,
+            .Height = 1u,
+            .DepthOrArraySize = 1u,
+            .MipLevels = 1u,
+            .Format = DXGI_FORMAT_UNKNOWN,
+            .SampleDesc = {1u, 0u},
+            .Layout = D3D12_TEXTURE_LAYOUT_ROW_MAJOR,
+            .Flags = D3D12_RESOURCE_FLAG_NONE,
+        };
+
+        indexBuffer.buffer = createBuffer(indexBufferResourceDesc, data, indexBufferName);
+
+        indexBuffer.indexBufferView = {
+            .BufferLocation = indexBuffer.buffer->GetGPUVirtualAddress(),
+            .SizeInBytes = bufferSize,
+            .Format = DXGI_FORMAT_R32_UINT,
+        };
+
+        return indexBuffer;
     }
 }

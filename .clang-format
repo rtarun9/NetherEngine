@@ -5,6 +5,7 @@ AlignOperands: 'true'
 AllowAllParametersOfDeclarationOnNextLine: true
 AllowShortFunctionsOnASingleLine: true
 AllowAllArgumentsOnNextLine: 'false'
+AllowShortCaseLabelsOnASingleLine: true
 BasedOnStyle: Microsoft
 BinPackArguments: false
 BinPackParameters: false

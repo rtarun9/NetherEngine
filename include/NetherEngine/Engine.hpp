@@ -44,6 +44,11 @@ namespace nether
         [[nodiscard]] Comptr<ID3D12Resource> createBuffer(const D3D12_RESOURCE_DESC& bufferResourceDesc,
                                                           const std::byte* data, const std::wstring_view bufferName);
 
+        // Helper functions for creating specific types of buffers (vertex, index, constant etc). Might be removed eventually, or made into templated functions.
+        [[nodiscard]] VertexBuffer createVertexBuffer(const std::byte* data, const uint32_t bufferSize, const std::wstring_view vertexBufferName);
+        [[nodiscard]] IndexBuffer createIndexBuffer(const std::byte* data, const uint32_t bufferSize, const std::wstring_view indexBufferName);
+        template <typename T> [[nodiscard]] ConstantBuffer<T> createConstantBuffer(const std::wstring_view constantBufferName);
+
       public:
         static constexpr uint32_t FRAME_COUNT = 2u;
 
@@ -83,6 +88,10 @@ namespace nether
         Comptr<ID3D12DescriptorHeap> m_dsvDescriptorHeap{};
         uint32_t m_dsvDescriptorSize{};
 
+        Comptr<ID3D12DescriptorHeap> m_cbvSrvUavDescriptorHeap{};
+        uint32_t m_cbvSrvUavDescriptorSize{};
+        CD3DX12_CPU_DESCRIPTOR_HANDLE m_currentCbvSrvUavDescriptorHeapHandle{};
+
         std::array<Comptr<ID3D12Resource>, FRAME_COUNT> m_backBuffers{};
         Comptr<IDXGISwapChain3> m_swapchain{};
 
@@ -93,4 +102,33 @@ namespace nether
 
         ConstantBuffer<TransformData> m_transformBuffer {};
     };
+
+    template <typename T> inline ConstantBuffer<T> Engine::createConstantBuffer(const std::wstring_view constantBufferName)
+    {
+        ConstantBuffer<T> constantBuffer{};
+
+        const D3D12_RESOURCE_DESC constantBufferResourceDesc = {
+            .Dimension = D3D12_RESOURCE_DIMENSION_BUFFER,
+            .Alignment = 0u,
+            .Width = sizeof(T),
+            .Height = 1u,
+            .DepthOrArraySize = 1u,
+            .MipLevels = 1u,
+            .Format = DXGI_FORMAT_UNKNOWN,
+            .SampleDesc = {1u, 0u},
+            .Layout = D3D12_TEXTURE_LAYOUT_ROW_MAJOR,
+            .Flags = D3D12_RESOURCE_FLAG_NONE,
+        };
+
+        constantBuffer.buffer = createBuffer(constantBufferResourceDesc, nullptr, constantBufferName);
+        const D3D12_CONSTANT_BUFFER_VIEW_DESC constantBufferConstantBufferViewDesc = {
+            .BufferLocation = constantBuffer.buffer->GetGPUVirtualAddress(),
+            .SizeInBytes = sizeof(T),
+        };
+
+        m_device->CreateConstantBufferView(&constantBufferConstantBufferViewDesc, m_currentCbvSrvUavDescriptorHeapHandle);
+        m_currentCbvSrvUavDescriptorHeapHandle.Offset(m_cbvSrvUavDescriptorSize);
+
+        return constantBuffer;
+    }
 }

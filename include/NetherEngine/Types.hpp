@@ -8,6 +8,14 @@ struct Uint2
     auto operator<=>(const Uint2& other) const = default;
 };
 
+// If multiple vertex types are to be used, then a different logic for create buffer must be used (best option is using std::span<> and templates).
+struct Vertex
+{
+    math::XMFLOAT3 position{};
+    math::XMFLOAT3 color{};
+};
+
+
 struct Pipeline
 {
     Comptr<ID3D12RootSignature> rootSignature{};
