@@ -13,6 +13,8 @@ namespace nether::ShaderCompiler
 
     Shader compile(const ShaderTypes& shaderType, const std::wstring_view shaderPath)
     {
+        Shader shader{};
+
         if (!utils)
         {
             throwIfFailed(::DxcCreateInstance(CLSID_DxcUtils, IID_PPV_ARGS(&utils)));
@@ -25,19 +27,19 @@ namespace nether::ShaderCompiler
         {
             switch (shaderType)
             {
-                case ShaderTypes::vertex:
+                case ShaderTypes::Vertex:
                     {
                         return L"VsMain";
                     }
                     break;
 
-                case ShaderTypes::pixel:
+                case ShaderTypes::Pixel:
                     {
                         return L"PsMain";
                     }
                     break;
 
-                    default:
+                default:
                     {
                         return L"";
                     }
@@ -49,19 +51,19 @@ namespace nether::ShaderCompiler
         {
             switch (shaderType)
             {
-                case ShaderTypes::vertex:
+                case ShaderTypes::Vertex:
                     {
                         return L"vs_6_6";
                     }
                     break;
 
-                case ShaderTypes::pixel:
+                case ShaderTypes::Pixel:
                     {
                         return L"ps_6_6";
                     }
                     break;
 
-                    default:
+                default:
                     {
                         return L"";
                     }
@@ -76,6 +78,7 @@ namespace nether::ShaderCompiler
             targetProfile.c_str(),
             DXC_ARG_PACK_MATRIX_ROW_MAJOR,
             DXC_ARG_WARNINGS_ARE_ERRORS,
+            DXC_ARG_ALL_RESOURCES_BOUND,
         };
 
         // Indicate that the shader should be in a debuggable state if in debug mode.
@@ -120,10 +123,52 @@ namespace nether::ShaderCompiler
             fatalError(errorMessage);
         }
 
+        // Get shader reflection data.
+        Comptr<IDxcBlob> reflectionBlob{};
+        throwIfFailed(compiledShaderBuffer->GetOutput(DXC_OUT_REFLECTION, IID_PPV_ARGS(&reflectionBlob), nullptr));
+
+        const DxcBuffer reflectionBuffer{
+            .Ptr = reflectionBlob->GetBufferPointer(),
+            .Size = reflectionBlob->GetBufferSize(),
+            .Encoding = 0,
+        };
+
+        Comptr<ID3D12ShaderReflection> shaderReflection{};
+        utils->CreateReflection(&reflectionBuffer, IID_PPV_ARGS(&shaderReflection));
+        D3D12_SHADER_DESC shaderDesc{};
+        shaderReflection->GetDesc(&shaderDesc);
+
+        shader.rootParameters.reserve(shaderDesc.BoundResources);
+        for (const uint32_t i : std::views::iota(0u, shaderDesc.BoundResources))
+        {
+            D3D12_SHADER_INPUT_BIND_DESC shaderInputBindDesc{};
+            throwIfFailed(shaderReflection->GetResourceBindingDesc(i, &shaderInputBindDesc));
+
+            shader.rootParameterIndexMap[stringToWString(shaderInputBindDesc.Name)] = i;
+
+            if (shaderInputBindDesc.Type == _D3D_SHADER_INPUT_TYPE::D3D_SIT_CBUFFER)
+            {
+                ID3D12ShaderReflectionConstantBuffer* shaderReflectionConstantBuffer = shaderReflection->GetConstantBufferByIndex(i);
+                D3D12_SHADER_BUFFER_DESC constantBufferDesc{};
+                shaderReflectionConstantBuffer->GetDesc(&constantBufferDesc);
+
+                const D3D12_ROOT_PARAMETER1 rootParameter{
+                    .ParameterType = D3D12_ROOT_PARAMETER_TYPE_CBV,
+                    .Descriptor{
+                        .ShaderRegister = shaderInputBindDesc.BindPoint,
+                        .RegisterSpace = shaderInputBindDesc.Space,
+                        .Flags = D3D12_ROOT_DESCRIPTOR_FLAG_NONE,
+                    },
+                };
+
+                shader.rootParameters.emplace_back(rootParameter);
+            }
+        }
+
         Comptr<IDxcBlob> compiledShaderBlob{nullptr};
         compiledShaderBuffer->GetOutput(DXC_OUT_OBJECT, IID_PPV_ARGS(&compiledShaderBlob), nullptr);
 
-        const Shader shader{.shaderBlob = compiledShaderBlob};
+        shader.shaderBlob = compiledShaderBlob;
         return shader;
     };
 }

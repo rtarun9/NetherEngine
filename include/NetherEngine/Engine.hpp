@@ -1,5 +1,6 @@
 #pragma once
-#pragma once
+
+#include "Camera.hpp"
 
 struct SDL_Window;
 
@@ -36,6 +37,7 @@ namespace nether
 
         void initPipelines();
         void initMeshes();
+        void initScene();
 
         void uploadBuffers();
 
@@ -97,10 +99,12 @@ namespace nether
 
         Comptr<ID3D12Resource> m_depthStencilTexture{};
 
-        Pipeline m_pipeline{};
+        GraphicsPipeline m_pipeline{};
         Mesh m_triangleMesh{};
 
         ConstantBuffer<TransformData> m_transformBuffer {};
+
+        Camera m_camera{};
     };
 
     template <typename T> inline ConstantBuffer<T> Engine::createConstantBuffer(const std::wstring_view constantBufferName)

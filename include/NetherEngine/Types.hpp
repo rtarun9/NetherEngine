@@ -15,11 +15,21 @@ struct Vertex
     math::XMFLOAT3 color{};
 };
 
+// Assumptions : All root parameters will be inline descriptors for now.
+struct Shader
+{
+    Comptr<IDxcBlob> shaderBlob{};
+    std::vector<D3D12_ROOT_PARAMETER1> rootParameters{};
+    std::unordered_map<std::wstring, uint32_t> rootParameterIndexMap{};
+};
 
-struct Pipeline
+struct GraphicsPipeline
 {
     Comptr<ID3D12RootSignature> rootSignature{};
     Comptr<ID3D12PipelineState> pipelineState{};
+
+    Shader vertexShader{};
+    Shader pixelShader{};
 };
 
 struct VertexBuffer

@@ -56,10 +56,20 @@ namespace nether
                 {
                     quit = true;
                 }
+
+                m_camera.handleInput(Keys::W, keyboardState[SDL_SCANCODE_W]);
+                m_camera.handleInput(Keys::A, keyboardState[SDL_SCANCODE_A]);
+                m_camera.handleInput(Keys::S, keyboardState[SDL_SCANCODE_S]);
+                m_camera.handleInput(Keys::D, keyboardState[SDL_SCANCODE_D]);
+
+                m_camera.handleInput(Keys::AUp, keyboardState[SDL_SCANCODE_UP]);
+                m_camera.handleInput(Keys::ALeft, keyboardState[SDL_SCANCODE_LEFT]);
+                m_camera.handleInput(Keys::ADown, keyboardState[SDL_SCANCODE_DOWN]);
+                m_camera.handleInput(Keys::ARight, keyboardState[SDL_SCANCODE_RIGHT]);
             }
 
             const auto currentFrameTime = clock.now();
-            const float deltaTime = static_cast<float>((currentFrameTime - previousFrameTime).count());
+            const float deltaTime = static_cast<float>((currentFrameTime - previousFrameTime).count() * 1e-9);
             previousFrameTime = currentFrameTime;
 
             update(deltaTime);
@@ -69,7 +79,16 @@ namespace nether
         }
     }
 
-    void Engine::update(const float deltaTime) {}
+    void Engine::update(const float deltaTime)
+    {
+        m_camera.update(deltaTime);
+
+        m_transformBuffer.data = {
+            m_camera.getLookAtMatrix() * math::XMMatrixPerspectiveFovLH(math::XMConvertToRadians(45.0f), (float)m_windowDimensions.x / (float)m_windowDimensions.y, 0.1f, 100.0f),
+        };
+
+        m_transformBuffer.update();
+    }
 
     void Engine::render()
     {
@@ -108,7 +127,8 @@ namespace nether
 
         cmd->IASetVertexBuffers(0u, 1u, &m_triangleMesh.vertexBuffer.vertexBufferView);
         cmd->IASetIndexBuffer(&m_triangleMesh.indexBuffer.indexBufferView);
-        cmd->SetGraphicsRootConstantBufferView(0u, m_transformBuffer.buffer->GetGPUVirtualAddress());
+
+        cmd->SetGraphicsRootConstantBufferView(m_pipeline.vertexShader.rootParameterIndexMap[L"transformBuffer"], m_transformBuffer.buffer->GetGPUVirtualAddress());
 
         cmd->DrawIndexedInstanced(36u, 1u, 0u, 0u, 0u);
 
@@ -396,7 +416,7 @@ namespace nether
 
         CD3DX12_CPU_DESCRIPTOR_HANDLE rtvHandle(m_rtvDescriptorHeap->GetCPUDescriptorHandleForHeapStart());
 
-        // Create the render target views for each swapchain backbuffer.
+        // Create the render target views for each swapchain backbuffer..
         for (const uint32_t bufferIndex : std::views::iota(0u, FRAME_COUNT))
         {
             throwIfFailed(m_swapchain->GetBuffer(bufferIndex, IID_PPV_ARGS(&m_backBuffers[bufferIndex])));
@@ -454,24 +474,23 @@ namespace nether
     void Engine::initPipelines()
     {
         // Setup the root signature. RS specifies what is the layout that resources are used in the shaders.
-        // One cbv inline descriptor.
-        const D3D12_ROOT_PARAMETER1 transformBufferRootParameter = {
-            .ParameterType = D3D12_ROOT_PARAMETER_TYPE_CBV,
-            .Descriptor =
-                {
-                    .ShaderRegister = 0u,
-                    .RegisterSpace = 0u,
-                    .Flags = D3D12_ROOT_DESCRIPTOR_FLAG_NONE,
-                },
-            .ShaderVisibility = D3D12_SHADER_VISIBILITY_VERTEX,
-        };
+        // Root signature parameters are determined by shader reflection.
+
+        // Setup shaders.
+        const Shader vertexShader = ShaderCompiler::compile(ShaderTypes::Vertex, L"shaders/TriangleShader.hlsl");
+        const Shader pixelShader = ShaderCompiler::compile(ShaderTypes::Pixel, L"shaders/TriangleShader.hlsl");
+
+        std::vector<D3D12_ROOT_PARAMETER1> rootParameters{};
+        rootParameters.reserve(vertexShader.rootParameters.size() + pixelShader.rootParameters.size());
+        rootParameters.insert(rootParameters.end(), vertexShader.rootParameters.begin(), vertexShader.rootParameters.end());
+        rootParameters.insert(rootParameters.end(), pixelShader.rootParameters.begin(), pixelShader.rootParameters.end());
 
         const D3D12_VERSIONED_ROOT_SIGNATURE_DESC rootSignaureDesc = {
             .Version = D3D_ROOT_SIGNATURE_VERSION_1_1,
             .Desc_1_1 =
                 {
-                    .NumParameters = 1u,
-                    .pParameters = &transformBufferRootParameter,
+                    .NumParameters = static_cast<uint32_t>(rootParameters.size()),
+                    .pParameters = rootParameters.data(),
                     .NumStaticSamplers = 0u,
                     .pStaticSamplers = nullptr,
                     .Flags = D3D12_ROOT_SIGNATURE_FLAG_ALLOW_INPUT_ASSEMBLER_INPUT_LAYOUT,
@@ -491,10 +510,6 @@ namespace nether
 
         throwIfFailed(m_device->CreateRootSignature(0u, rootSignatureBlob->GetBufferPointer(), rootSignatureBlob->GetBufferSize(), IID_PPV_ARGS(&m_pipeline.rootSignature)));
         setName(m_pipeline.rootSignature.Get(), L"Root signature");
-
-        // Setup shaders.
-        const Shader vertexShader = ShaderCompiler::compile(ShaderTypes::vertex, L"shaders/TriangleShader.hlsl");
-        const Shader pixelShader = ShaderCompiler::compile(ShaderTypes::pixel, L"shaders/TriangleShader.hlsl");
 
         const D3D12_SHADER_BYTECODE vertexShaderByteCode = {
             .pShaderBytecode = vertexShader.shaderBlob->GetBufferPointer(),
@@ -591,18 +606,9 @@ namespace nether
         m_triangleMesh.indexBuffer = createIndexBuffer(reinterpret_cast<const std::byte*>(triangleIndices.data()), indexBufferSize, L"Triangle Index Buffer");
 
         m_transformBuffer = createConstantBuffer<TransformData>(L"Transform buffer");
-
-        static const math::XMVECTOR eyePosition = math::XMVectorSet(0.0f, 0.0f, -10.0f, 1.0f);
-        static const math::XMVECTOR targetPosition = math::XMVectorSet(0.0f, 0.0f, 0.0f, 1.0f);
-        static const math::XMVECTOR upDirection = math::XMVectorSet(0.0f, 1.0f, 0.0f, 0.0f);
-
-        m_transformBuffer.data = {
-            math::XMMatrixLookAtLH(eyePosition, targetPosition, upDirection) *
-                math::XMMatrixPerspectiveFovLH(math::XMConvertToRadians(45.0f), (float)m_windowDimensions.x / (float)m_windowDimensions.y, 0.1f, 100.0f),
-        };
-
-        m_transformBuffer.update();
     }
+
+    void Engine::initScene() {}
 
     void Engine::uploadBuffers()
     {

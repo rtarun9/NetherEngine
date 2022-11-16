@@ -32,6 +32,7 @@ static constexpr bool NETHER_DEUBG_MODE = false;
 #include <dxcapi.h>
 #include <wrl.h>
 #include <d3dx12.h>
+#include <d3d12shader.h>
 
 // Math library includes.
 #include <DirectXMath.h>

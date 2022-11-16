@@ -4,13 +4,8 @@ namespace nether
 {
     enum class ShaderTypes : uint8_t
     {
-        vertex,
-        pixel,
-    };
-
-    struct Shader
-    {
-        Comptr<IDxcBlob> shaderBlob{};
+        Vertex,
+        Pixel,
     };
 }
 
