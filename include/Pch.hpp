@@ -1,9 +1,9 @@
 #pragma once
 
 #ifdef NETHER_DEBUG
-static constexpr bool NETHER_DEUBG_MODE = true;
+static constexpr bool NETHER_DEBUG_MODE = true;
 #else
-static constexpr bool NETHER_DEUBG_MODE = false;
+static constexpr bool NETHER_DEBUG_MODE = false;
 #endif
 
 // STL includes.

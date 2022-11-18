@@ -6,11 +6,6 @@ struct SDL_Window;
 
 namespace nether
 {
-    struct alignas(256) TransformData
-    {
-        math::XMMATRIX mvpMatrix{};
-    };
-
     class Engine
     {
       public:
@@ -27,7 +22,7 @@ namespace nether
         FrameResources& getCurrentFrameResources() { return m_frameResources[m_frameIndex]; }
 
         void initPlatformBackend();
-        
+
         void initGraphicsBackend();
 
         void initDescriptorHeaps();
@@ -37,14 +32,16 @@ namespace nether
 
         void initPipelines();
         void initMeshes();
+        void initTextures();
         void initScene();
 
-        void uploadBuffers();
+        void uploadResources();
 
       private:
         // If data is nullptr, a buffer with CPU / GPU access will be created. Else, a GPU only buffer will be created.
-        [[nodiscard]] Comptr<ID3D12Resource> createBuffer(const D3D12_RESOURCE_DESC& bufferResourceDesc,
-                                                          const std::byte* data, const std::wstring_view bufferName);
+        [[nodiscard]] Comptr<ID3D12Resource> createBuffer(const D3D12_RESOURCE_DESC& bufferResourceDesc, const std::byte* data, const std::wstring_view bufferName);
+
+        [[nodiscard]] Texture createTexture(const std::string_view texturePath, const DXGI_FORMAT& format, const std::wstring_view textureName);
 
         // Helper functions for creating specific types of buffers (vertex, index, constant etc). Might be removed eventually, or made into templated functions.
         [[nodiscard]] VertexBuffer createVertexBuffer(const std::byte* data, const uint32_t bufferSize, const std::wstring_view vertexBufferName);
@@ -76,14 +73,14 @@ namespace nether
         Comptr<ID3D12CommandAllocator> m_copyCommandAllocator{};
         Comptr<ID3D12GraphicsCommandList2> m_copyCommandList{};
 
-        std::vector<Comptr<ID3D12Resource>> m_uploadBuffers{};
+        std::vector<Comptr<ID3D12Resource>> m_uploadResources{};
 
         uint32_t m_frameIndex{};
         uint32_t m_frameCount{};
 
         Comptr<ID3D12Fence1> m_fence{};
         HANDLE m_fenceEvent{};
-        
+
         Comptr<ID3D12DescriptorHeap> m_rtvDescriptorHeap{};
         uint32_t m_rtvDescriptorSize{};
 
@@ -99,10 +96,11 @@ namespace nether
 
         Comptr<ID3D12Resource> m_depthStencilTexture{};
 
-        GraphicsPipeline m_pipeline{};
-        Mesh m_triangleMesh{};
+        std::unordered_map<std::wstring, GraphicsPipeline> m_graphicsPipelines{};
+        std::unordered_map<std::wstring, Mesh> m_meshes{};
+        std::unordered_map<std::wstring, Texture> m_textures{};
 
-        ConstantBuffer<TransformData> m_transformBuffer {};
+        std::unordered_map<std::wstring, Renderable> m_renderables{};
 
         Camera m_camera{};
     };

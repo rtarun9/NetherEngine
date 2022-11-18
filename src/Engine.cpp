@@ -7,6 +7,9 @@
 #include <SDL2/SDL.h>
 #include <SDL2/SDL_syswm.h>
 
+#define STB_IMAGE_IMPLEMENTATION
+#include <stb_image.h>
+
 namespace nether
 {
     Engine::~Engine()
@@ -28,11 +31,17 @@ namespace nether
         // Initialize and create all the pipelines and root signatures.
         initPipelines();
 
+        // Initialize all the textures.
+        initTextures();
+
         // Initialize meshes.
         initMeshes();
 
         // Upload all buffers and execute copy command queue.
-        uploadBuffers();
+        uploadResources();
+
+        // Initialize the scene objects (i.e the renderables).
+        initScene();
 
         debugLog(L"Initialized engine.");
 
@@ -83,11 +92,18 @@ namespace nether
     {
         m_camera.update(deltaTime);
 
-        m_transformBuffer.data = {
-            m_camera.getLookAtMatrix() * math::XMMatrixPerspectiveFovLH(math::XMConvertToRadians(45.0f), (float)m_windowDimensions.x / (float)m_windowDimensions.y, 0.1f, 100.0f),
+        m_renderables[L"Triangle"].transformBuffer.data = {
+            .modelMatrix = math::XMMatrixIdentity(),
         };
 
-        m_transformBuffer.update();
+        m_renderables[L"Triangle"].transformBuffer.update();
+
+        getCurrentFrameResources().sceneBuffer.data = {
+            .viewProjectionMatrix = m_camera.getLookAtMatrix() *
+                                    math::XMMatrixPerspectiveFovLH(math::XMConvertToRadians(45.0f), (float)m_windowDimensions.x / (float)m_windowDimensions.y, 0.1f, 100.0f),
+        };
+
+        getCurrentFrameResources().sceneBuffer.update();
     }
 
     void Engine::render()
@@ -101,9 +117,6 @@ namespace nether
 
         // Set pipeline state.
         const std::array<ID3D12DescriptorHeap*, 1u> shaderVisibleDescriptorHeaps{};
-
-        cmd->SetGraphicsRootSignature(m_pipeline.rootSignature.Get());
-        cmd->SetPipelineState(m_pipeline.pipelineState.Get());
 
         // Transition back buffer from presentable state to writable (renderable) state.
         const CD3DX12_RESOURCE_BARRIER presentationToRenderTargetBarrier =
@@ -125,12 +138,35 @@ namespace nether
         cmd->RSSetScissorRects(1u, &m_scissorRect);
         cmd->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
 
-        cmd->IASetVertexBuffers(0u, 1u, &m_triangleMesh.vertexBuffer.vertexBufferView);
-        cmd->IASetIndexBuffer(&m_triangleMesh.indexBuffer.indexBufferView);
+        GraphicsPipeline* lastGraphicsPipeline{};
+        Mesh* lastMesh{};
 
-        cmd->SetGraphicsRootConstantBufferView(m_pipeline.vertexShader.rootParameterIndexMap[L"transformBuffer"], m_transformBuffer.buffer->GetGPUVirtualAddress());
+        for (const auto& [name, renderable] : m_renderables)
+        {
+            if (renderable.graphicsPipeline != lastGraphicsPipeline)
+            {
+                lastGraphicsPipeline = renderable.graphicsPipeline;
 
-        cmd->DrawIndexedInstanced(36u, 1u, 0u, 0u, 0u);
+                cmd->SetGraphicsRootSignature(lastGraphicsPipeline->rootSignature.Get());
+                cmd->SetPipelineState(lastGraphicsPipeline->pipelineState.Get());
+            }
+
+            if (lastMesh != renderable.mesh)
+            {
+                lastMesh = renderable.mesh;
+
+                cmd->IASetVertexBuffers(0u, 1u, &lastMesh->vertexBuffer.vertexBufferView);
+                cmd->IASetIndexBuffer(&lastMesh->indexBuffer.indexBufferView);
+            }
+
+            cmd->SetGraphicsRootConstantBufferView(lastGraphicsPipeline->vertexShader.rootParameterIndexMap[L"sceneBuffer"],
+                                                   getCurrentFrameResources().sceneBuffer.buffer->GetGPUVirtualAddress());
+
+            cmd->SetGraphicsRootConstantBufferView(lastGraphicsPipeline->vertexShader.rootParameterIndexMap[L"transformBuffer"],
+                                                   renderable.transformBuffer.buffer->GetGPUVirtualAddress());
+
+            cmd->DrawIndexedInstanced(36u, 1u, 0u, 0u, 0u);
+        }
 
         const CD3DX12_RESOURCE_BARRIER renderTargetToPresentationBarrier =
             CD3DX12_RESOURCE_BARRIER::Transition(m_backBuffers[m_frameIndex].Get(), D3D12_RESOURCE_STATE_RENDER_TARGET, D3D12_RESOURCE_STATE_PRESENT);
@@ -190,10 +226,10 @@ namespace nether
         const uint32_t monitorWidth = displayMode.w;
         const uint32_t monitorHeight = displayMode.h;
 
-        // Window must cover 85% of the screen.
+        // Window must cover 100% of the screen.
         m_windowDimensions = Uint2{
-            .x = static_cast<uint32_t>(monitorWidth * 0.85f),
-            .y = static_cast<uint32_t>(monitorHeight * 0.85f),
+            .x = static_cast<uint32_t>(monitorWidth * 1.0f),
+            .y = static_cast<uint32_t>(monitorHeight * 1.0f),
         };
 
         m_window = SDL_CreateWindow("LunarEngine", SDL_WINDOWPOS_CENTERED, SDL_WINDOWPOS_CENTERED, m_windowDimensions.x, m_windowDimensions.y, SDL_WINDOW_ALLOW_HIGHDPI);
@@ -214,7 +250,7 @@ namespace nether
         // Initialize core DX12 objects.
 
         // Enable the debug layer in debug builds.
-        if constexpr (NETHER_DEUBG_MODE)
+        if constexpr (NETHER_DEBUG_MODE)
         {
             Comptr<ID3D12Debug5> debugController{};
             throwIfFailed(::D3D12GetDebugInterface(IID_PPV_ARGS(&debugController)));
@@ -230,7 +266,7 @@ namespace nether
         // Set the DXGI_CREATE_FACTORY_DEBUG in debug mode.
         constexpr uint32_t factoryCreationFlags = [=]()
         {
-            if (NETHER_DEUBG_MODE)
+            if (NETHER_DEBUG_MODE)
             {
                 return DXGI_CREATE_FACTORY_DEBUG;
             }
@@ -253,7 +289,7 @@ namespace nether
         setName(m_device.Get(), L"D3D12 Device");
 
         // Setup the info queue in debug builds to place breakpoint on invalid API usage.
-        if constexpr (NETHER_DEUBG_MODE)
+        if constexpr (NETHER_DEBUG_MODE)
         {
             Comptr<ID3D12InfoQueue1> infoQueue{};
             throwIfFailed(m_device.As(&infoQueue));
@@ -497,6 +533,9 @@ namespace nether
                 },
         };
 
+        m_graphicsPipelines[L"BasePipeline"].vertexShader = vertexShader;
+        m_graphicsPipelines[L"BasePipeline"].pixelShader = pixelShader;
+
         Comptr<ID3DBlob> rootSignatureBlob{};
         Comptr<ID3DBlob> errorBlob{};
 
@@ -508,8 +547,11 @@ namespace nether
             fatalError(errorMessage);
         }
 
-        throwIfFailed(m_device->CreateRootSignature(0u, rootSignatureBlob->GetBufferPointer(), rootSignatureBlob->GetBufferSize(), IID_PPV_ARGS(&m_pipeline.rootSignature)));
-        setName(m_pipeline.rootSignature.Get(), L"Root signature");
+        throwIfFailed(m_device->CreateRootSignature(0u,
+                                                    rootSignatureBlob->GetBufferPointer(),
+                                                    rootSignatureBlob->GetBufferSize(),
+                                                    IID_PPV_ARGS(&m_graphicsPipelines[L"BasePipeline"].rootSignature)));
+        setName(m_graphicsPipelines[L"BasePipeline"].rootSignature.Get(), L"Root signature");
 
         const D3D12_SHADER_BYTECODE vertexShaderByteCode = {
             .pShaderBytecode = vertexShader.shaderBlob->GetBufferPointer(),
@@ -562,7 +604,7 @@ namespace nether
         };
 
         const D3D12_GRAPHICS_PIPELINE_STATE_DESC graphicsPipelineStateDesc = {
-            .pRootSignature = m_pipeline.rootSignature.Get(),
+            .pRootSignature = m_graphicsPipelines[L"BasePipeline"].rootSignature.Get(),
             .VS = vertexShaderByteCode,
             .PS = pixelShaderByteCode,
             .BlendState = CD3DX12_BLEND_DESC(D3D12_DEFAULT),
@@ -579,8 +621,8 @@ namespace nether
             .Flags = D3D12_PIPELINE_STATE_FLAG_NONE,
         };
 
-        throwIfFailed(m_device->CreateGraphicsPipelineState(&graphicsPipelineStateDesc, IID_PPV_ARGS(&m_pipeline.pipelineState)));
-        setName(m_pipeline.pipelineState.Get(), L"Pipeline State");
+        throwIfFailed(m_device->CreateGraphicsPipelineState(&graphicsPipelineStateDesc, IID_PPV_ARGS(&m_graphicsPipelines[L"BasePipeline"].pipelineState)));
+        setName(m_graphicsPipelines[L"BasePipeline"].pipelineState.Get(), L"Pipeline State");
     }
 
     void Engine::initMeshes()
@@ -598,19 +640,30 @@ namespace nether
 
         constexpr uint32_t vertexBufferSize = static_cast<uint32_t>(sizeof(Vertex) * triangleVertices.size());
 
-        m_triangleMesh.vertexBuffer = createVertexBuffer(reinterpret_cast<const std::byte*>(triangleVertices.data()), vertexBufferSize, L"Triangle Vertex Buffer");
+        m_meshes[L"TriangleMesh"].vertexBuffer = createVertexBuffer(reinterpret_cast<const std::byte*>(triangleVertices.data()), vertexBufferSize, L"Triangle Vertex Buffer");
 
         constexpr std::array<uint32_t, 36> triangleIndices{0, 1, 2, 0, 2, 3, 4, 6, 5, 4, 7, 6, 4, 5, 1, 4, 1, 0, 3, 2, 6, 3, 6, 7, 1, 5, 6, 1, 6, 2, 4, 0, 3, 4, 3, 7};
         constexpr uint32_t indexBufferSize = static_cast<uint32_t>(sizeof(uint32_t) * triangleIndices.size());
 
-        m_triangleMesh.indexBuffer = createIndexBuffer(reinterpret_cast<const std::byte*>(triangleIndices.data()), indexBufferSize, L"Triangle Index Buffer");
-
-        m_transformBuffer = createConstantBuffer<TransformData>(L"Transform buffer");
+        m_meshes[L"TriangleMesh"].indexBuffer = createIndexBuffer(reinterpret_cast<const std::byte*>(triangleIndices.data()), indexBufferSize, L"Triangle Index Buffer");
     }
 
-    void Engine::initScene() {}
+    void Engine::initTextures() { m_textures[L"AlbedoTexture"] = createTexture("assets/Suzanne/glTF/Suzanne_BaseColor.png", DXGI_FORMAT_R8G8B8A8_UNORM_SRGB, L"Albedo Texture"); }
 
-    void Engine::uploadBuffers()
+    void Engine::initScene()
+    {
+        // Create scene buffer (one per frame count).
+        for (const uint32_t frameIndex : std::views::iota(0u, FRAME_COUNT))
+        {
+            m_frameResources[frameIndex].sceneBuffer = createConstantBuffer<SceneData>(L"Scene Buffer");
+        }
+
+        m_renderables[L"Triangle"].mesh = &m_meshes[L"TriangleMesh"];
+        m_renderables[L"Triangle"].graphicsPipeline = &m_graphicsPipelines[L"BasePipeline"];
+        m_renderables[L"Triangle"].transformBuffer = createConstantBuffer<TransformData>(L"Transform buffer");
+    };
+
+    void Engine::uploadResources()
     {
         throwIfFailed(m_copyCommandList->Close());
         const std::array<ID3D12CommandList*, 1u> copyCommandLists{m_copyCommandList.Get()};
@@ -623,7 +676,7 @@ namespace nether
             ::WaitForSingleObject(m_fenceEvent, INFINITE);
         }
 
-        m_uploadBuffers.clear();
+        m_uploadResources.clear();
     }
 
     Comptr<ID3D12Resource> Engine::createBuffer(const D3D12_RESOURCE_DESC& bufferResourceDesc, const std::byte* data, const std::wstring_view bufferName)
@@ -676,12 +729,53 @@ namespace nether
 
             m_copyCommandList->CopyBufferRegion(buffer.Get(), 0u, uploadBuffer.Get(), 0u, bufferSize);
 
-            m_uploadBuffers.emplace_back(uploadBuffer);
+            m_uploadResources.emplace_back(uploadBuffer);
         }
 
         setName(buffer.Get(), bufferName);
 
         return buffer;
+    }
+
+    Texture Engine::createTexture(const std::string_view texturePath, const DXGI_FORMAT& format, const std::wstring_view textureName)
+    {
+        Texture texture{};
+
+        int32_t componentCount{4u};
+        int32_t width{};
+        int32_t height{};
+
+        stbi_uc* data = stbi_load(texturePath.data(), &width, &height, nullptr, componentCount);
+
+        // Create the resource desc for this texture.
+        const D3D12_RESOURCE_DESC textureResourceDesc = {
+            .Dimension = D3D12_RESOURCE_DIMENSION_TEXTURE2D,
+            .Alignment = 0u,
+            .Width = static_cast<uint64_t>(width),
+            .Height = static_cast<uint32_t>(height),
+            .DepthOrArraySize = 1u,
+            .MipLevels = 1u,
+            .Format = format,
+            .SampleDesc = {1u, 0u},
+            .Layout = D3D12_TEXTURE_LAYOUT_UNKNOWN,
+            .Flags = D3D12_RESOURCE_FLAG_NONE,
+        };
+
+        const CD3DX12_HEAP_PROPERTIES defaultHeapProperties(D3D12_HEAP_TYPE_DEFAULT);
+
+        throwIfFailed(m_device->CreateCommittedResource(&defaultHeapProperties,
+                                                        D3D12_HEAP_FLAG_NONE,
+                                                        &textureResourceDesc,
+                                                        D3D12_RESOURCE_STATE_COMMON,
+                                                        nullptr,
+                                                        IID_PPV_ARGS(&texture.texture)));
+
+        const uint32_t bufferSize = static_cast<uint32_t>(textureResourceDesc.Width * textureResourceDesc.Height);
+
+        // WIP.
+
+        setName(texture.texture.Get(), textureName);
+        return texture;
     }
 
     VertexBuffer Engine::createVertexBuffer(const std::byte* data, const uint32_t bufferSize, const std::wstring_view vertexBufferName)

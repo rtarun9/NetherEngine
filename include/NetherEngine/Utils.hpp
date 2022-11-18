@@ -69,7 +69,7 @@ inline void throwIfFailed(const HRESULT hr)
 
 inline void setName(ID3D12Object* const object, const std::wstring_view name, const uint32_t index = 0u)
 {
-    if constexpr (NETHER_DEUBG_MODE)
+    if constexpr (NETHER_DEBUG_MODE)
     {
         if (index == 0)
         {
@@ -85,7 +85,7 @@ inline void setName(ID3D12Object* const object, const std::wstring_view name, co
 
 inline void debugLog(const std::wstring_view message)
 {
-    if constexpr (NETHER_DEUBG_MODE)
+    if constexpr (NETHER_DEBUG_MODE)
     {
         std::wcout << "[Debug] : " << message.data() << '\n';
     }

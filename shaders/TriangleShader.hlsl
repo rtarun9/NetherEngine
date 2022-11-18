@@ -10,14 +10,24 @@ struct VertexOutput
     float4 color : COLOR;
 };
 
-struct TransformData { row_major matrix mvpMatrix; };
+struct TransformData
+{
+    row_major matrix modelMatrix;
+};
 
-ConstantBuffer<TransformData> transformBuffer : register(b0);
+struct SceneData
+{
+    row_major matrix viewProjectionMatrix;
+};
+
+ConstantBuffer<SceneData> sceneBuffer : register(b0);
+
+ConstantBuffer<TransformData> transformBuffer : register(b1);
 
 VertexOutput VsMain(VertexInput input)
 {
     VertexOutput output;
-    output.position = mul(float4(input.position, 1.0f), transformBuffer.mvpMatrix);
+    output.position = mul(float4(input.position, 1.0f), mul(transformBuffer.modelMatrix, sceneBuffer.viewProjectionMatrix));
     output.color = float4(input.color, 1.0f);
 
     return output;

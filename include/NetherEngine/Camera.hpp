@@ -35,7 +35,7 @@ namespace nether
         float m_yaw{};
 
         float m_movementSpeed{4.0f};
-        float m_rotationSpeed{2.5f};
+        float m_rotationSpeed{1.5f};
 
         std::array<bool, EnumClassValue(Keys::TotalKeys)> m_keys{};
     };

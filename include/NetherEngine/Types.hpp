@@ -51,12 +51,9 @@ struct Mesh
     IndexBuffer indexBuffer{};
 };
 
-struct FrameResources
+struct Texture
 {
-    Comptr<ID3D12CommandAllocator> commandAllocator{};
-    Comptr<ID3D12GraphicsCommandList2> commandList{};
-
-    uint64_t fenceValue{};
+    Comptr<ID3D12Resource> texture{};
 };
 
 template <typename T> struct ConstantBuffer
@@ -79,4 +76,31 @@ template <typename T> struct ConstantBuffer
         std::memcpy(bufferPointer, &data, bufferSize);
         buffer->Unmap(0u, nullptr);
     }
+};
+
+struct alignas(256) TransformData
+{
+    math::XMMATRIX modelMatrix{};
+};
+
+struct Renderable
+{
+    Mesh* mesh{};
+    GraphicsPipeline* graphicsPipeline{};
+    ConstantBuffer<TransformData> transformBuffer{};
+};
+
+struct alignas(256) SceneData
+{
+    math::XMMATRIX viewProjectionMatrix{};
+};
+
+struct FrameResources
+{
+    Comptr<ID3D12CommandAllocator> commandAllocator{};
+    Comptr<ID3D12GraphicsCommandList2> commandList{};
+
+    uint64_t fenceValue{};
+
+    ConstantBuffer<SceneData> sceneBuffer{};
 };
