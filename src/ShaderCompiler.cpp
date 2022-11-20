@@ -11,7 +11,7 @@ namespace nether::ShaderCompiler
     Comptr<IDxcUtils> utils{};
     Comptr<IDxcIncludeHandler> includeHandler{};
 
-    Shader compile(const ShaderTypes& shaderType, const std::wstring_view shaderPath)
+    Shader compile(const ShaderTypes& shaderType, const std::wstring_view shaderPath, GraphicsPipeline& pipeline)
     {
         Shader shader{};
 
@@ -83,7 +83,7 @@ namespace nether::ShaderCompiler
 
         // Indicate that the shader should be in a debuggable state if in debug mode.
         // Else, set optimization level to 03.
-        if constexpr (NETHER_DEBUG)
+        if constexpr (NETHER_DEBUG_MODE)
         {
             compilationArguments.push_back(DXC_ARG_DEBUG);
         }
@@ -138,16 +138,15 @@ namespace nether::ShaderCompiler
         D3D12_SHADER_DESC shaderDesc{};
         shaderReflection->GetDesc(&shaderDesc);
 
-        shader.rootParameters.reserve(shaderDesc.BoundResources);
         for (const uint32_t i : std::views::iota(0u, shaderDesc.BoundResources))
         {
             D3D12_SHADER_INPUT_BIND_DESC shaderInputBindDesc{};
             throwIfFailed(shaderReflection->GetResourceBindingDesc(i, &shaderInputBindDesc));
 
-            shader.rootParameterIndexMap[stringToWString(shaderInputBindDesc.Name)] = i;
 
-            if (shaderInputBindDesc.Type == _D3D_SHADER_INPUT_TYPE::D3D_SIT_CBUFFER)
+            if (shaderInputBindDesc.Type == D3D_SIT_CBUFFER)
             {
+                pipeline.rootParameterIndexMap[stringToWString(shaderInputBindDesc.Name)] = pipeline.rootParameters.size();
                 ID3D12ShaderReflectionConstantBuffer* shaderReflectionConstantBuffer = shaderReflection->GetConstantBufferByIndex(i);
                 D3D12_SHADER_BUFFER_DESC constantBufferDesc{};
                 shaderReflectionConstantBuffer->GetDesc(&constantBufferDesc);
@@ -161,7 +160,24 @@ namespace nether::ShaderCompiler
                     },
                 };
 
-                shader.rootParameters.emplace_back(rootParameter);
+                pipeline.rootParameters.push_back(rootParameter);
+            }
+            else if (shaderInputBindDesc.Type == D3D_SIT_TEXTURE)
+            {
+                pipeline.rootParameterIndexMap[stringToWString(shaderInputBindDesc.Name)] = pipeline.rootParameters.size();
+                const CD3DX12_DESCRIPTOR_RANGE1 srvRange(D3D12_DESCRIPTOR_RANGE_TYPE_SRV, 1u, shaderInputBindDesc.BindPoint, shaderInputBindDesc.Space);
+                pipeline.descriptorRanges.push_back(srvRange);
+
+                const D3D12_ROOT_PARAMETER1 rootParameter{
+                    .ParameterType = D3D12_ROOT_PARAMETER_TYPE_DESCRIPTOR_TABLE,
+                    .DescriptorTable =
+                        {
+                            .NumDescriptorRanges = 1u,
+                            .pDescriptorRanges = &pipeline.descriptorRanges.back(),
+                        },
+                };
+
+                pipeline.rootParameters.push_back(rootParameter);
             }
         }
 

@@ -12,15 +12,14 @@ struct Uint2
 struct Vertex
 {
     math::XMFLOAT3 position{};
-    math::XMFLOAT3 color{};
+    math::XMFLOAT2 textureCoord{};
+    math::XMFLOAT3 normal{};
 };
 
 // Assumptions : All root parameters will be inline descriptors for now.
 struct Shader
 {
     Comptr<IDxcBlob> shaderBlob{};
-    std::vector<D3D12_ROOT_PARAMETER1> rootParameters{};
-    std::unordered_map<std::wstring, uint32_t> rootParameterIndexMap{};
 };
 
 struct GraphicsPipeline
@@ -30,6 +29,10 @@ struct GraphicsPipeline
 
     Shader vertexShader{};
     Shader pixelShader{};
+
+    std::vector<D3D12_DESCRIPTOR_RANGE1> descriptorRanges{};
+    std::vector<D3D12_ROOT_PARAMETER1> rootParameters{};
+    std::unordered_map<std::wstring, uint32_t> rootParameterIndexMap{};
 };
 
 struct VertexBuffer
@@ -54,6 +57,7 @@ struct Mesh
 struct Texture
 {
     Comptr<ID3D12Resource> texture{};
+    D3D12_GPU_DESCRIPTOR_HANDLE gpuDescriptorHandle{};
 };
 
 template <typename T> struct ConstantBuffer

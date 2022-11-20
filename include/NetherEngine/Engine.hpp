@@ -35,9 +35,9 @@ namespace nether
         void initTextures();
         void initScene();
 
-        void uploadResources();
+        void executeCopyCommands();
 
-      private:
+    private:
         // If data is nullptr, a buffer with CPU / GPU access will be created. Else, a GPU only buffer will be created.
         [[nodiscard]] Comptr<ID3D12Resource> createBuffer(const D3D12_RESOURCE_DESC& bufferResourceDesc, const std::byte* data, const std::wstring_view bufferName);
 
@@ -46,6 +46,9 @@ namespace nether
         // Helper functions for creating specific types of buffers (vertex, index, constant etc). Might be removed eventually, or made into templated functions.
         [[nodiscard]] VertexBuffer createVertexBuffer(const std::byte* data, const uint32_t bufferSize, const std::wstring_view vertexBufferName);
         [[nodiscard]] IndexBuffer createIndexBuffer(const std::byte* data, const uint32_t bufferSize, const std::wstring_view indexBufferName);
+
+        [[nodiscard]] Mesh createMesh(const std::string_view meshPath);
+
         template <typename T> [[nodiscard]] ConstantBuffer<T> createConstantBuffer(const std::wstring_view constantBufferName);
 
       public:
@@ -72,8 +75,7 @@ namespace nether
 
         Comptr<ID3D12CommandAllocator> m_copyCommandAllocator{};
         Comptr<ID3D12GraphicsCommandList2> m_copyCommandList{};
-
-        std::vector<Comptr<ID3D12Resource>> m_uploadResources{};
+        uint64_t m_copyFenceValue{};
 
         uint32_t m_frameIndex{};
         uint32_t m_frameCount{};
@@ -89,7 +91,8 @@ namespace nether
 
         Comptr<ID3D12DescriptorHeap> m_cbvSrvUavDescriptorHeap{};
         uint32_t m_cbvSrvUavDescriptorSize{};
-        CD3DX12_CPU_DESCRIPTOR_HANDLE m_currentCbvSrvUavDescriptorHeapHandle{};
+        CD3DX12_CPU_DESCRIPTOR_HANDLE m_currentCbvSrvUavCPUDescriptorHeapHandle{};
+        CD3DX12_GPU_DESCRIPTOR_HANDLE m_currentCbvSrvUavGPUDescriptorHeapHandle{};
 
         std::array<Comptr<ID3D12Resource>, FRAME_COUNT> m_backBuffers{};
         Comptr<IDXGISwapChain3> m_swapchain{};
@@ -128,8 +131,9 @@ namespace nether
             .SizeInBytes = sizeof(T),
         };
 
-        m_device->CreateConstantBufferView(&constantBufferConstantBufferViewDesc, m_currentCbvSrvUavDescriptorHeapHandle);
-        m_currentCbvSrvUavDescriptorHeapHandle.Offset(m_cbvSrvUavDescriptorSize);
+        m_device->CreateConstantBufferView(&constantBufferConstantBufferViewDesc, m_currentCbvSrvUavCPUDescriptorHeapHandle);
+        m_currentCbvSrvUavCPUDescriptorHeapHandle.Offset(m_cbvSrvUavDescriptorSize);
+        m_currentCbvSrvUavGPUDescriptorHeapHandle.Offset(m_cbvSrvUavDescriptorSize);
 
         return constantBuffer;
     }

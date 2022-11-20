@@ -1,13 +1,14 @@
 struct VertexInput
 {
     float3 position : POSITION;
-    float3 color : COLOR;
+    float2 textureCoord : TEXTURE_COORD;
+    float3 normal : NORMAL;
 };
 
 struct VertexOutput
 {
     float4 position : SV_Position;
-    float4 color : COLOR;
+    float2 textureCoord : TEXTURE_COORD;
 };
 
 struct TransformData
@@ -28,13 +29,16 @@ VertexOutput VsMain(VertexInput input)
 {
     VertexOutput output;
     output.position = mul(float4(input.position, 1.0f), mul(transformBuffer.modelMatrix, sceneBuffer.viewProjectionMatrix));
-    output.color = float4(input.color, 1.0f);
+    output.textureCoord = input.textureCoord;
 
     return output;
 }
 
+SamplerState textureSampler : register(s0, space1);
+Texture2D<float4> albedoTexture : register(t0, space1);
+
 float4 PsMain(VertexOutput input) : SV_Target
 {
-    input.color.rgb = pow(input.color.rgb, 1 / 2.2f);
-    return input.color;
+    float3 abledoColor = albedoTexture.Sample(textureSampler, input.textureCoord).xyz;
+    return float4(abledoColor, 1.0f);
 }

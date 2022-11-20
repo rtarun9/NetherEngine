@@ -5,9 +5,9 @@
   "description": "D3D12 SandBox",
   "dependencies": [
     "sdl2",
+    "directx-dxc",
     "tinygltf",
     "stb",
-    "directx-dxc",
     "d3dx12"
   ]
 }

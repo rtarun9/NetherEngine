@@ -1,5 +1,7 @@
 #pragma once
 
+#include "Types.hpp"
+
 namespace nether
 {
     enum class ShaderTypes : uint8_t
@@ -12,5 +14,6 @@ namespace nether
 // Rather than using a static class, a namespace is used here. The corresponding .cpp file will hold the 'member functions' of the namespace.
 namespace nether::ShaderCompiler
 {
-    Shader compile(const ShaderTypes& shaderType, const std::wstring_view shaderPath);
+    // Takes a Pipeline object as inout parameter to setup shader reflection data.
+    Shader compile(const ShaderTypes& shaderType, const std::wstring_view shaderPath, GraphicsPipeline& pipeline);
 }

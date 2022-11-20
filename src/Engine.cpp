@@ -8,7 +8,10 @@
 #include <SDL2/SDL_syswm.h>
 
 #define STB_IMAGE_IMPLEMENTATION
-#include <stb_image.h>
+#define STB_IMAGE_WRITE_IMPLEMENTATION
+#define TINYGLTF_IMPLEMENTATION
+#define TINYGLTF_NO_EXTERNAL_IMAGE
+#include <tiny_gltf.h>
 
 namespace nether
 {
@@ -36,9 +39,6 @@ namespace nether
 
         // Initialize meshes.
         initMeshes();
-
-        // Upload all buffers and execute copy command queue.
-        uploadResources();
 
         // Initialize the scene objects (i.e the renderables).
         initScene();
@@ -92,11 +92,11 @@ namespace nether
     {
         m_camera.update(deltaTime);
 
-        m_renderables[L"Triangle"].transformBuffer.data = {
+        m_renderables[L"Cube"].transformBuffer.data = {
             .modelMatrix = math::XMMatrixIdentity(),
         };
 
-        m_renderables[L"Triangle"].transformBuffer.update();
+        m_renderables[L"Cube"].transformBuffer.update();
 
         getCurrentFrameResources().sceneBuffer.data = {
             .viewProjectionMatrix = m_camera.getLookAtMatrix() *
@@ -116,7 +116,7 @@ namespace nether
         Comptr<ID3D12GraphicsCommandList2>& cmd = getCurrentFrameResources().commandList;
 
         // Set pipeline state.
-        const std::array<ID3D12DescriptorHeap*, 1u> shaderVisibleDescriptorHeaps{};
+        const std::array<ID3D12DescriptorHeap*, 1u> shaderVisibleDescriptorHeaps{m_cbvSrvUavDescriptorHeap.Get()};
 
         // Transition back buffer from presentable state to writable (renderable) state.
         const CD3DX12_RESOURCE_BARRIER presentationToRenderTargetBarrier =
@@ -149,6 +149,7 @@ namespace nether
 
                 cmd->SetGraphicsRootSignature(lastGraphicsPipeline->rootSignature.Get());
                 cmd->SetPipelineState(lastGraphicsPipeline->pipelineState.Get());
+                cmd->SetDescriptorHeaps(static_cast<uint32_t>(shaderVisibleDescriptorHeaps.size()), shaderVisibleDescriptorHeaps.data());
             }
 
             if (lastMesh != renderable.mesh)
@@ -159,11 +160,14 @@ namespace nether
                 cmd->IASetIndexBuffer(&lastMesh->indexBuffer.indexBufferView);
             }
 
-            cmd->SetGraphicsRootConstantBufferView(lastGraphicsPipeline->vertexShader.rootParameterIndexMap[L"sceneBuffer"],
+            cmd->SetGraphicsRootConstantBufferView(lastGraphicsPipeline->rootParameterIndexMap[L"sceneBuffer"],
                                                    getCurrentFrameResources().sceneBuffer.buffer->GetGPUVirtualAddress());
 
-            cmd->SetGraphicsRootConstantBufferView(lastGraphicsPipeline->vertexShader.rootParameterIndexMap[L"transformBuffer"],
+            cmd->SetGraphicsRootConstantBufferView(lastGraphicsPipeline->rootParameterIndexMap[L"transformBuffer"],
                                                    renderable.transformBuffer.buffer->GetGPUVirtualAddress());
+
+            cmd->SetGraphicsRootDescriptorTable(lastGraphicsPipeline->rootParameterIndexMap[L"albedoTexture"],
+                                                   m_textures[L"AlbedoTexture"].gpuDescriptorHandle);
 
             cmd->DrawIndexedInstanced(36u, 1u, 0u, 0u, 0u);
         }
@@ -349,7 +353,8 @@ namespace nether
         setName(m_cbvSrvUavDescriptorHeap.Get(), L"CBV SRV UAV descriptor heap");
 
         m_cbvSrvUavDescriptorSize = m_device->GetDescriptorHandleIncrementSize(D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV);
-        m_currentCbvSrvUavDescriptorHeapHandle = m_cbvSrvUavDescriptorHeap->GetCPUDescriptorHandleForHeapStart();
+        m_currentCbvSrvUavCPUDescriptorHeapHandle = m_cbvSrvUavDescriptorHeap->GetCPUDescriptorHandleForHeapStart();
+        m_currentCbvSrvUavGPUDescriptorHeapHandle = m_cbvSrvUavDescriptorHeap->GetGPUDescriptorHandleForHeapStart();
     }
 
     void Engine::initCommandObjects()
@@ -381,6 +386,9 @@ namespace nether
 
             throwIfFailed(m_frameResources[frameIndex].commandList->Close());
         }
+
+        // Reset current command list (so that it can be used for the initial pre rendering setup).
+        throwIfFailed(m_frameResources[0].commandList->Reset(m_frameResources[0].commandAllocator.Get(), nullptr));
 
         // Create copy command objects.
         const D3D12_COMMAND_QUEUE_DESC copyCommandQueueDesc = {
@@ -513,22 +521,34 @@ namespace nether
         // Root signature parameters are determined by shader reflection.
 
         // Setup shaders.
-        const Shader vertexShader = ShaderCompiler::compile(ShaderTypes::Vertex, L"shaders/TriangleShader.hlsl");
-        const Shader pixelShader = ShaderCompiler::compile(ShaderTypes::Pixel, L"shaders/TriangleShader.hlsl");
+        const Shader vertexShader = ShaderCompiler::compile(ShaderTypes::Vertex, L"shaders/TestShader.hlsl", m_graphicsPipelines[L"BasePipeline"]);
+        const Shader pixelShader = ShaderCompiler::compile(ShaderTypes::Pixel, L"shaders/TestShader.hlsl", m_graphicsPipelines[L"BasePipeline"]);
 
-        std::vector<D3D12_ROOT_PARAMETER1> rootParameters{};
-        rootParameters.reserve(vertexShader.rootParameters.size() + pixelShader.rootParameters.size());
-        rootParameters.insert(rootParameters.end(), vertexShader.rootParameters.begin(), vertexShader.rootParameters.end());
-        rootParameters.insert(rootParameters.end(), pixelShader.rootParameters.begin(), pixelShader.rootParameters.end());
+        // Setup default (test) static sampler.
+        const D3D12_STATIC_SAMPLER_DESC staticSamplerDesc = {
+            .Filter = D3D12_FILTER_MIN_MAG_MIP_POINT,
+            .AddressU = D3D12_TEXTURE_ADDRESS_MODE_WRAP,
+            .AddressV = D3D12_TEXTURE_ADDRESS_MODE_WRAP,
+            .AddressW = D3D12_TEXTURE_ADDRESS_MODE_WRAP,
+            .MipLODBias = 0,
+            .MaxAnisotropy = 0,
+            .ComparisonFunc = D3D12_COMPARISON_FUNC_NEVER,
+            .BorderColor = D3D12_STATIC_BORDER_COLOR_TRANSPARENT_BLACK,
+            .MinLOD = 0.0f,
+            .MaxLOD = D3D12_FLOAT32_MAX,
+            .ShaderRegister = 0,
+            .RegisterSpace = 1,
+            .ShaderVisibility = D3D12_SHADER_VISIBILITY_PIXEL,
+        };
 
         const D3D12_VERSIONED_ROOT_SIGNATURE_DESC rootSignaureDesc = {
             .Version = D3D_ROOT_SIGNATURE_VERSION_1_1,
             .Desc_1_1 =
                 {
-                    .NumParameters = static_cast<uint32_t>(rootParameters.size()),
-                    .pParameters = rootParameters.data(),
-                    .NumStaticSamplers = 0u,
-                    .pStaticSamplers = nullptr,
+                    .NumParameters = static_cast<uint32_t>(m_graphicsPipelines[L"BasePipeline"].rootParameters.size()),
+                    .pParameters = m_graphicsPipelines[L"BasePipeline"].rootParameters.data(),
+                    .NumStaticSamplers = 1u,
+                    .pStaticSamplers = &staticSamplerDesc,
                     .Flags = D3D12_ROOT_SIGNATURE_FLAG_ALLOW_INPUT_ASSEMBLER_INPUT_LAYOUT,
                 },
         };
@@ -569,7 +589,7 @@ namespace nether
         defaultRasterizerDesc.FrontCounterClockwise = false;
 
         // Setup input layout.
-        constexpr std::array<D3D12_INPUT_ELEMENT_DESC, 2u> inputElementDescs = {
+        constexpr std::array<D3D12_INPUT_ELEMENT_DESC, 3u> inputElementDescs = {
             D3D12_INPUT_ELEMENT_DESC{
                 .SemanticName = "POSITION",
                 .SemanticIndex = 0u,
@@ -580,7 +600,16 @@ namespace nether
                 .InstanceDataStepRate = 0u,
             },
             D3D12_INPUT_ELEMENT_DESC{
-                .SemanticName = "COLOR",
+                .SemanticName = "TEXTURE_COORD",
+                .SemanticIndex = 0u,
+                .Format = DXGI_FORMAT_R32G32_FLOAT,
+                .InputSlot = 0u,
+                .AlignedByteOffset = D3D12_APPEND_ALIGNED_ELEMENT,
+                .InputSlotClass = D3D12_INPUT_CLASSIFICATION_PER_VERTEX_DATA,
+                .InstanceDataStepRate = 0u,
+            },
+            D3D12_INPUT_ELEMENT_DESC{
+                .SemanticName = "NORMAL",
                 .SemanticIndex = 0u,
                 .Format = DXGI_FORMAT_R32G32B32_FLOAT,
                 .InputSlot = 0u,
@@ -625,30 +654,26 @@ namespace nether
         setName(m_graphicsPipelines[L"BasePipeline"].pipelineState.Get(), L"Pipeline State");
     }
 
-    void Engine::initMeshes()
+    void Engine::initMeshes() { m_meshes[L"CubeMesh"] = createMesh("assets/Cube/glTF/Cube.gltf"); }
+
+    void Engine::initTextures()
     {
-        constexpr std::array<Vertex, 8> triangleVertices{
-            Vertex{.position = math::XMFLOAT3(-1.0f, -1.0f, -1.0f), .color = math::XMFLOAT3(0.0f, 0.0f, 0.0f)},
-            Vertex{.position = math::XMFLOAT3(-1.0f, 1.0f, -1.0f), .color = math::XMFLOAT3(0.0f, 1.0f, 0.0f)},
-            Vertex{.position = math::XMFLOAT3(1.0f, 1.0f, -1.0f), .color = math::XMFLOAT3(1.0f, 1.0f, 0.0f)},
-            Vertex{.position = math::XMFLOAT3(1.0f, -1.0f, -1.0f), .color = math::XMFLOAT3(1.0f, 0.0f, 0.0f)},
-            Vertex{.position = math::XMFLOAT3(-1.0f, -1.0f, 1.0f), .color = math::XMFLOAT3(0.0f, 0.0f, 1.0f)},
-            Vertex{.position = math::XMFLOAT3(-1.0f, 1.0f, 1.0f), .color = math::XMFLOAT3(0.0f, 1.0f, 1.0f)},
-            Vertex{.position = math::XMFLOAT3(1.0f, 1.0f, 1.0f), .color = math::XMFLOAT3(1.0f, 1.0f, 1.0f)},
-            Vertex{.position = math::XMFLOAT3(1.0f, -1.0f, 1.0f), .color = math::XMFLOAT3(1.0f, 0.0f, 1.0f)},
-        };
+        m_textures[L"AlbedoTexture"] = createTexture("assets/Cube/glTF/Cube_BaseColor.png", DXGI_FORMAT_R8G8B8A8_UNORM_SRGB, L"Albedo Texture");
+    
+        // note(rtarun9) : Move this elsewhere.
+        // Executes all transition barriers (i.e mostly copy dest -> pixel shader resource view) and flushes the GPU.
 
-        constexpr uint32_t vertexBufferSize = static_cast<uint32_t>(sizeof(Vertex) * triangleVertices.size());
+        throwIfFailed(getCurrentFrameResources().commandList->Close());
+        const std::array<ID3D12CommandList*, 1u> commandLists{getCurrentFrameResources().commandList.Get()};
+        m_directCommandQueue->ExecuteCommandLists(1u, commandLists.data());
 
-        m_meshes[L"TriangleMesh"].vertexBuffer = createVertexBuffer(reinterpret_cast<const std::byte*>(triangleVertices.data()), vertexBufferSize, L"Triangle Vertex Buffer");
-
-        constexpr std::array<uint32_t, 36> triangleIndices{0, 1, 2, 0, 2, 3, 4, 6, 5, 4, 7, 6, 4, 5, 1, 4, 1, 0, 3, 2, 6, 3, 6, 7, 1, 5, 6, 1, 6, 2, 4, 0, 3, 4, 3, 7};
-        constexpr uint32_t indexBufferSize = static_cast<uint32_t>(sizeof(uint32_t) * triangleIndices.size());
-
-        m_meshes[L"TriangleMesh"].indexBuffer = createIndexBuffer(reinterpret_cast<const std::byte*>(triangleIndices.data()), indexBufferSize, L"Triangle Index Buffer");
+        m_directCommandQueue->Signal(m_fence.Get(), 1u);
+        if (m_fence->GetCompletedValue() < 1u)
+        {
+            throwIfFailed(m_fence->SetEventOnCompletion(1u, m_fenceEvent));
+            ::WaitForSingleObject(m_fenceEvent, INFINITE);
+        }
     }
-
-    void Engine::initTextures() { m_textures[L"AlbedoTexture"] = createTexture("assets/Suzanne/glTF/Suzanne_BaseColor.png", DXGI_FORMAT_R8G8B8A8_UNORM_SRGB, L"Albedo Texture"); }
 
     void Engine::initScene()
     {
@@ -658,26 +683,28 @@ namespace nether
             m_frameResources[frameIndex].sceneBuffer = createConstantBuffer<SceneData>(L"Scene Buffer");
         }
 
-        m_renderables[L"Triangle"].mesh = &m_meshes[L"TriangleMesh"];
-        m_renderables[L"Triangle"].graphicsPipeline = &m_graphicsPipelines[L"BasePipeline"];
-        m_renderables[L"Triangle"].transformBuffer = createConstantBuffer<TransformData>(L"Transform buffer");
-    };
+        m_renderables[L"Cube"].mesh = &m_meshes[L"CubeMesh"];
+        m_renderables[L"Cube"].graphicsPipeline = &m_graphicsPipelines[L"BasePipeline"];
+        m_renderables[L"Cube"].transformBuffer = createConstantBuffer<TransformData>(L"Cube Transform buffer");
+    }
 
-    void Engine::uploadResources()
+    void Engine::executeCopyCommands()
     {
         throwIfFailed(m_copyCommandList->Close());
         const std::array<ID3D12CommandList*, 1u> copyCommandLists{m_copyCommandList.Get()};
         m_copyCommandQueue->ExecuteCommandLists(1u, copyCommandLists.data());
 
-        m_copyCommandQueue->Signal(m_copyFence.Get(), 1u);
-        if (m_copyFence->GetCompletedValue() < 1u)
+        m_copyFenceValue++;
+
+        m_copyCommandQueue->Signal(m_copyFence.Get(), m_copyFenceValue);
+        if (m_copyFence->GetCompletedValue() < m_copyFenceValue)
         {
-            throwIfFailed(m_copyFence->SetEventOnCompletion(1u, m_fenceEvent));
-            ::WaitForSingleObject(m_fenceEvent, INFINITE);
+            throwIfFailed(m_copyFence->SetEventOnCompletion(m_copyFenceValue, nullptr));
         }
 
-        m_uploadResources.clear();
-    }
+        throwIfFailed(m_copyCommandAllocator->Reset());
+        throwIfFailed(m_copyCommandList->Reset(m_copyCommandAllocator.Get(), nullptr));
+    };
 
     Comptr<ID3D12Resource> Engine::createBuffer(const D3D12_RESOURCE_DESC& bufferResourceDesc, const std::byte* data, const std::wstring_view bufferName)
     {
@@ -729,7 +756,7 @@ namespace nether
 
             m_copyCommandList->CopyBufferRegion(buffer.Get(), 0u, uploadBuffer.Get(), 0u, bufferSize);
 
-            m_uploadResources.emplace_back(uploadBuffer);
+            executeCopyCommands();
         }
 
         setName(buffer.Get(), bufferName);
@@ -770,9 +797,55 @@ namespace nether
                                                         nullptr,
                                                         IID_PPV_ARGS(&texture.texture)));
 
-        const uint32_t bufferSize = static_cast<uint32_t>(textureResourceDesc.Width * textureResourceDesc.Height);
+        const UINT64 bufferSize = GetRequiredIntermediateSize(texture.texture.Get(), 0, 1);
 
-        // WIP.
+        // Create a GPU upload buffer for the texture.
+        Comptr<ID3D12Resource> uploadBuffer{};
+        const CD3DX12_HEAP_PROPERTIES uploadHeapProperties(D3D12_HEAP_TYPE_UPLOAD);
+        const CD3DX12_RESOURCE_DESC uploadBufferResourceDesc = CD3DX12_RESOURCE_DESC::Buffer(bufferSize);
+
+        throwIfFailed(m_device->CreateCommittedResource(&uploadHeapProperties,
+                                                        D3D12_HEAP_FLAG_NONE,
+                                                        &uploadBufferResourceDesc,
+                                                        D3D12_RESOURCE_STATE_GENERIC_READ,
+                                                        nullptr,
+                                                        IID_PPV_ARGS(&uploadBuffer)));
+
+        setName(uploadBuffer.Get(), textureName.data() + std::wstring(L" upload buffer"));
+
+        // Place the data on the upload buffer and copy it into the GPU only buffer using the UpdateSubresources() helper function.
+        const D3D12_SUBRESOURCE_DATA textureData = {
+            .pData = data,
+            .RowPitch = width * 4u,
+            .SlicePitch = width * height * 4u,
+        };
+
+        UpdateSubresources(m_copyCommandList.Get(), texture.texture.Get(), uploadBuffer.Get(), 0u, 0u, 1u, &textureData);
+        executeCopyCommands();
+
+        // Transition to pixel shader resource format, as SRV requires texture to be in this format.
+        const CD3DX12_RESOURCE_BARRIER copyDestToPixelShaderResourceBarrier =
+            CD3DX12_RESOURCE_BARRIER::Transition(texture.texture.Get(),
+                                                 D3D12_RESOURCE_STATE_COPY_DEST,
+                                                 D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE | D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
+
+        getCurrentFrameResources().commandList->ResourceBarrier(1u, &copyDestToPixelShaderResourceBarrier);
+
+        // Create the shader resource view for the texture.
+        const D3D12_SHADER_RESOURCE_VIEW_DESC shaderResourceViewDesc = {
+            .Format = format,
+            .ViewDimension = D3D12_SRV_DIMENSION_TEXTURE2D,
+            .Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING,
+            .Texture2D{
+                .MipLevels = 1u,
+            },
+        };
+
+        m_device->CreateShaderResourceView(texture.texture.Get(), &shaderResourceViewDesc, m_currentCbvSrvUavCPUDescriptorHeapHandle);
+        m_currentCbvSrvUavCPUDescriptorHeapHandle.Offset(m_cbvSrvUavDescriptorSize);
+
+        texture.gpuDescriptorHandle = m_currentCbvSrvUavGPUDescriptorHeapHandle;
+        m_currentCbvSrvUavGPUDescriptorHeapHandle.Offset(m_cbvSrvUavDescriptorSize);
 
         setName(texture.texture.Get(), textureName);
         return texture;
@@ -836,5 +909,127 @@ namespace nether
         };
 
         return indexBuffer;
+    }
+
+    Mesh Engine::createMesh(const std::string_view modelPath)
+    {
+        // Use tinygltf loader to load the model.
+
+        const std::string fullModelPath = modelPath.data();
+
+        std::string warning{};
+        std::string error{};
+
+        tinygltf::TinyGLTF context{};
+
+        tinygltf::Model model{};
+
+        if (!context.LoadASCIIFromFile(&model, &error, &warning, fullModelPath))
+        {
+            if (!error.empty())
+            {
+                fatalError(error);
+            }
+
+            if (!warning.empty())
+            {
+                fatalError(warning);
+            }
+        }
+
+        // Build meshes.
+        const tinygltf::Scene& scene = model.scenes[model.defaultScene];
+
+        tinygltf::Node& node = model.nodes[0u];
+        node.mesh = std::max<int32_t>(0u, node.mesh);
+
+        const tinygltf::Mesh& nodeMesh = model.meshes[node.mesh];
+
+        // note(rtarun9) : for now have all vertices in single vertex buffer. Same for index buffer.
+        std::vector<Vertex> vertices{};
+        std::vector<uint32_t> indices{};
+
+        for (size_t i = 0; i < nodeMesh.primitives.size(); ++i)
+        {
+
+            // Reference used :
+            // https://github.com/mateeeeeee/Adria-DX12/blob/fc98468095bf5688a186ca84d94990ccd2f459b0/Adria/Rendering/EntityLoader.cpp.
+
+            // Get Accessors, buffer view and buffer for each attribute (position, textureCoord, normal).
+            tinygltf::Primitive primitive = nodeMesh.primitives[i];
+            const tinygltf::Accessor& indexAccesor = model.accessors[primitive.indices];
+
+            // Position data.
+            const tinygltf::Accessor& positionAccesor = model.accessors[primitive.attributes["POSITION"]];
+            const tinygltf::BufferView& positionBufferView = model.bufferViews[positionAccesor.bufferView];
+            const tinygltf::Buffer& positionBuffer = model.buffers[positionBufferView.buffer];
+
+            const int positionByteStride = positionAccesor.ByteStride(positionBufferView);
+            uint8_t const* const positions = &positionBuffer.data[positionBufferView.byteOffset + positionAccesor.byteOffset];
+
+            // TextureCoord data.
+            const tinygltf::Accessor& textureCoordAccesor = model.accessors[primitive.attributes["TEXCOORD_0"]];
+            const tinygltf::BufferView& textureCoordBufferView = model.bufferViews[textureCoordAccesor.bufferView];
+            const tinygltf::Buffer& textureCoordBuffer = model.buffers[textureCoordBufferView.buffer];
+            const int textureCoordBufferStride = textureCoordAccesor.ByteStride(textureCoordBufferView);
+            uint8_t const* const texcoords = &textureCoordBuffer.data[textureCoordBufferView.byteOffset + textureCoordAccesor.byteOffset];
+
+            // Normal data.
+            const tinygltf::Accessor& normalAccesor = model.accessors[primitive.attributes["NORMAL"]];
+            const tinygltf::BufferView& normalBufferView = model.bufferViews[normalAccesor.bufferView];
+            const tinygltf::Buffer& normalBuffer = model.buffers[normalBufferView.buffer];
+            const int normalByteStride = normalAccesor.ByteStride(normalBufferView);
+            uint8_t const* const normals = &normalBuffer.data[normalBufferView.byteOffset + normalAccesor.byteOffset];
+
+            // Fill in the vertices's array.
+            for (size_t i : std::views::iota(0u, positionAccesor.count))
+            {
+                const math::XMFLOAT3 position{(reinterpret_cast<float const*>(positions + (i * positionByteStride)))[0],
+                                              (reinterpret_cast<float const*>(positions + (i * positionByteStride)))[1],
+                                              (reinterpret_cast<float const*>(positions + (i * positionByteStride)))[2]};
+
+                const math::XMFLOAT2 textureCoord{
+                    (reinterpret_cast<float const*>(texcoords + (i * textureCoordBufferStride)))[0],
+                    (reinterpret_cast<float const*>(texcoords + (i * textureCoordBufferStride)))[1],
+                };
+
+                const math::XMFLOAT3 normal{
+                    (reinterpret_cast<float const*>(normals + (i * normalByteStride)))[0],
+                    (reinterpret_cast<float const*>(normals + (i * normalByteStride)))[1],
+                    (reinterpret_cast<float const*>(normals + (i * normalByteStride)))[2],
+                };
+
+                // note(rtarun9) : using normals as colors for now, until texture loading is implemented.
+                vertices.emplace_back(Vertex{position, textureCoord, normal});
+            }
+
+            // Get the index buffer data.
+            const tinygltf::BufferView& indexBufferView = model.bufferViews[indexAccesor.bufferView];
+            const tinygltf::Buffer& indexBuffer = model.buffers[indexBufferView.buffer];
+            const int indexByteStride = indexAccesor.ByteStride(indexBufferView);
+            uint8_t const* const indexes = indexBuffer.data.data() + indexBufferView.byteOffset + indexAccesor.byteOffset;
+
+            // Fill indices array.
+            for (size_t i : std::views::iota(0u, indexAccesor.count))
+            {
+                if (indexAccesor.componentType == TINYGLTF_COMPONENT_TYPE_UNSIGNED_SHORT)
+                {
+                    indices.push_back(static_cast<uint32_t>((reinterpret_cast<uint16_t const*>(indexes + (i * indexByteStride)))[0]));
+                }
+                else if (indexAccesor.componentType == TINYGLTF_COMPONENT_TYPE_UNSIGNED_INT)
+                {
+                    indices.push_back(static_cast<uint32_t>((reinterpret_cast<uint32_t const*>(indexes + (i * indexByteStride)))[0]));
+                }
+            }
+        }
+
+        const uint32_t indexBufferSize = static_cast<uint32_t>(indices.size() * sizeof(uint32_t));
+        const uint32_t vertexBufferSize = static_cast<uint32_t>(vertices.size() * sizeof(Vertex));
+
+        Mesh mesh{};
+        mesh.indexBuffer = createIndexBuffer(reinterpret_cast<const std::byte*>(indices.data()), indexBufferSize, stringToWString(modelPath) + std::wstring(L" Index buffer"));
+        mesh.vertexBuffer = createVertexBuffer(reinterpret_cast<const std::byte*>(vertices.data()), vertexBufferSize, stringToWString(modelPath) + std::wstring(L" Vertex buffer"));
+
+        return mesh;
     }
 }
