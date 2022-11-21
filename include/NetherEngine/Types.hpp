@@ -22,6 +22,18 @@ struct Shader
     Comptr<IDxcBlob> shaderBlob{};
 };
 
+struct GraphicsPipelineReflectionData
+{
+    std::vector<D3D12_DESCRIPTOR_RANGE1> descriptorRanges{};
+    std::vector<D3D12_ROOT_PARAMETER1> rootParameters{};
+    std::unordered_map<std::wstring, uint32_t> rootParameterIndexMap{};
+
+    std::vector<std::string>
+        inputElementSemanticNames{}; // For some C++ scope - rule, semantic names of the input elements descs go out of scope after leaving the shader compile function.
+    std::vector<D3D12_INPUT_ELEMENT_DESC> inputElementDescs;
+    D3D12_INPUT_LAYOUT_DESC inputLayoutDesc{};
+};
+
 struct GraphicsPipeline
 {
     Comptr<ID3D12RootSignature> rootSignature{};
@@ -30,8 +42,6 @@ struct GraphicsPipeline
     Shader vertexShader{};
     Shader pixelShader{};
 
-    std::vector<D3D12_DESCRIPTOR_RANGE1> descriptorRanges{};
-    std::vector<D3D12_ROOT_PARAMETER1> rootParameters{};
     std::unordered_map<std::wstring, uint32_t> rootParameterIndexMap{};
 };
 

@@ -387,9 +387,6 @@ namespace nether
             throwIfFailed(m_frameResources[frameIndex].commandList->Close());
         }
 
-        // Reset current command list (so that it can be used for the initial pre rendering setup).
-        throwIfFailed(m_frameResources[0].commandList->Reset(m_frameResources[0].commandAllocator.Get(), nullptr));
-
         // Create copy command objects.
         const D3D12_COMMAND_QUEUE_DESC copyCommandQueueDesc = {
             .Type = D3D12_COMMAND_LIST_TYPE_COPY,
@@ -520,9 +517,11 @@ namespace nether
         // Setup the root signature. RS specifies what is the layout that resources are used in the shaders.
         // Root signature parameters are determined by shader reflection.
 
+        GraphicsPipelineReflectionData pipelineReflectionData{};
+
         // Setup shaders.
-        const Shader vertexShader = ShaderCompiler::compile(ShaderTypes::Vertex, L"shaders/TestShader.hlsl", m_graphicsPipelines[L"BasePipeline"]);
-        const Shader pixelShader = ShaderCompiler::compile(ShaderTypes::Pixel, L"shaders/TestShader.hlsl", m_graphicsPipelines[L"BasePipeline"]);
+        const Shader vertexShader = ShaderCompiler::compile(ShaderTypes::Vertex, L"shaders/TestShader.hlsl", pipelineReflectionData);
+        const Shader pixelShader = ShaderCompiler::compile(ShaderTypes::Pixel, L"shaders/TestShader.hlsl", pipelineReflectionData);
 
         // Setup default (test) static sampler.
         const D3D12_STATIC_SAMPLER_DESC staticSamplerDesc = {
@@ -545,8 +544,8 @@ namespace nether
             .Version = D3D_ROOT_SIGNATURE_VERSION_1_1,
             .Desc_1_1 =
                 {
-                    .NumParameters = static_cast<uint32_t>(m_graphicsPipelines[L"BasePipeline"].rootParameters.size()),
-                    .pParameters = m_graphicsPipelines[L"BasePipeline"].rootParameters.data(),
+                    .NumParameters = static_cast<uint32_t>(pipelineReflectionData.rootParameters.size()),
+                    .pParameters = pipelineReflectionData.rootParameters.data(),
                     .NumStaticSamplers = 1u,
                     .pStaticSamplers = &staticSamplerDesc,
                     .Flags = D3D12_ROOT_SIGNATURE_FLAG_ALLOW_INPUT_ASSEMBLER_INPUT_LAYOUT,
@@ -555,6 +554,7 @@ namespace nether
 
         m_graphicsPipelines[L"BasePipeline"].vertexShader = vertexShader;
         m_graphicsPipelines[L"BasePipeline"].pixelShader = pixelShader;
+        m_graphicsPipelines[L"BasePipeline"].rootParameterIndexMap = pipelineReflectionData.rootParameterIndexMap;
 
         Comptr<ID3DBlob> rootSignatureBlob{};
         Comptr<ID3DBlob> errorBlob{};
@@ -588,42 +588,6 @@ namespace nether
         CD3DX12_RASTERIZER_DESC defaultRasterizerDesc(D3D12_DEFAULT);
         defaultRasterizerDesc.FrontCounterClockwise = false;
 
-        // Setup input layout.
-        constexpr std::array<D3D12_INPUT_ELEMENT_DESC, 3u> inputElementDescs = {
-            D3D12_INPUT_ELEMENT_DESC{
-                .SemanticName = "POSITION",
-                .SemanticIndex = 0u,
-                .Format = DXGI_FORMAT_R32G32B32_FLOAT,
-                .InputSlot = 0u,
-                .AlignedByteOffset = D3D12_APPEND_ALIGNED_ELEMENT,
-                .InputSlotClass = D3D12_INPUT_CLASSIFICATION_PER_VERTEX_DATA,
-                .InstanceDataStepRate = 0u,
-            },
-            D3D12_INPUT_ELEMENT_DESC{
-                .SemanticName = "TEXTURE_COORD",
-                .SemanticIndex = 0u,
-                .Format = DXGI_FORMAT_R32G32_FLOAT,
-                .InputSlot = 0u,
-                .AlignedByteOffset = D3D12_APPEND_ALIGNED_ELEMENT,
-                .InputSlotClass = D3D12_INPUT_CLASSIFICATION_PER_VERTEX_DATA,
-                .InstanceDataStepRate = 0u,
-            },
-            D3D12_INPUT_ELEMENT_DESC{
-                .SemanticName = "NORMAL",
-                .SemanticIndex = 0u,
-                .Format = DXGI_FORMAT_R32G32B32_FLOAT,
-                .InputSlot = 0u,
-                .AlignedByteOffset = D3D12_APPEND_ALIGNED_ELEMENT,
-                .InputSlotClass = D3D12_INPUT_CLASSIFICATION_PER_VERTEX_DATA,
-                .InstanceDataStepRate = 0u,
-            },
-        };
-
-        const D3D12_INPUT_LAYOUT_DESC inputLayoutDesc = {
-            .pInputElementDescs = inputElementDescs.data(),
-            .NumElements = static_cast<uint32_t>(inputElementDescs.size()),
-        };
-
         // Setup depth stencil state.
         const D3D12_DEPTH_STENCIL_DESC depthStencilDesc = {
             .DepthEnable = true,
@@ -640,7 +604,7 @@ namespace nether
             .SampleMask = UINT_MAX,
             .RasterizerState = defaultRasterizerDesc,
             .DepthStencilState = depthStencilDesc,
-            .InputLayout = inputLayoutDesc,
+            .InputLayout = pipelineReflectionData.inputLayoutDesc,
             .PrimitiveTopologyType = D3D12_PRIMITIVE_TOPOLOGY_TYPE_TRIANGLE,
             .NumRenderTargets = 1u,
             .RTVFormats = DXGI_FORMAT_R8G8B8A8_UNORM,
@@ -659,20 +623,6 @@ namespace nether
     void Engine::initTextures()
     {
         m_textures[L"AlbedoTexture"] = createTexture("assets/Cube/glTF/Cube_BaseColor.png", DXGI_FORMAT_R8G8B8A8_UNORM_SRGB, L"Albedo Texture");
-    
-        // note(rtarun9) : Move this elsewhere.
-        // Executes all transition barriers (i.e mostly copy dest -> pixel shader resource view) and flushes the GPU.
-
-        throwIfFailed(getCurrentFrameResources().commandList->Close());
-        const std::array<ID3D12CommandList*, 1u> commandLists{getCurrentFrameResources().commandList.Get()};
-        m_directCommandQueue->ExecuteCommandLists(1u, commandLists.data());
-
-        m_directCommandQueue->Signal(m_fence.Get(), 1u);
-        if (m_fence->GetCompletedValue() < 1u)
-        {
-            throwIfFailed(m_fence->SetEventOnCompletion(1u, m_fenceEvent));
-            ::WaitForSingleObject(m_fenceEvent, INFINITE);
-        }
     }
 
     void Engine::initScene()
@@ -827,9 +777,7 @@ namespace nether
         const CD3DX12_RESOURCE_BARRIER copyDestToPixelShaderResourceBarrier =
             CD3DX12_RESOURCE_BARRIER::Transition(texture.texture.Get(),
                                                  D3D12_RESOURCE_STATE_COPY_DEST,
-                                                 D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE | D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
-
-        getCurrentFrameResources().commandList->ResourceBarrier(1u, &copyDestToPixelShaderResourceBarrier);
+                                                 D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
 
         // Create the shader resource view for the texture.
         const D3D12_SHADER_RESOURCE_VIEW_DESC shaderResourceViewDesc = {

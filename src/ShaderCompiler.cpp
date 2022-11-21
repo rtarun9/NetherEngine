@@ -11,7 +11,7 @@ namespace nether::ShaderCompiler
     Comptr<IDxcUtils> utils{};
     Comptr<IDxcIncludeHandler> includeHandler{};
 
-    Shader compile(const ShaderTypes& shaderType, const std::wstring_view shaderPath, GraphicsPipeline& pipeline)
+    Shader compile(const ShaderTypes& shaderType, const std::wstring_view shaderPath, GraphicsPipelineReflectionData& pipelineReflectionData)
     {
         Shader shader{};
 
@@ -138,15 +138,65 @@ namespace nether::ShaderCompiler
         D3D12_SHADER_DESC shaderDesc{};
         shaderReflection->GetDesc(&shaderDesc);
 
+        // Helper lambda function : Given a mask, return the underlying data format.
+        auto maskToFormat = [=](uint32_t mask)
+        {
+            switch (mask)
+            {
+                case 7:
+                    {
+                        return DXGI_FORMAT_R32G32B32_FLOAT;
+                    }
+                    break;
+
+                case 3:
+                    {
+                        return DXGI_FORMAT_R32G32_FLOAT;
+                    }
+                    break;
+            }
+
+            return DXGI_FORMAT_UNKNOWN;
+        };
+
+        // Setup the input assembler if used. Only applicable for vertex shaders currently.
+        if (shaderType == ShaderTypes::Vertex)
+        {
+            pipelineReflectionData.inputElementSemanticNames.reserve(shaderDesc.InputParameters);
+            pipelineReflectionData.inputElementDescs.reserve(shaderDesc.InputParameters);
+
+            for (const uint32_t parameterIndex : std::views::iota(0u, shaderDesc.InputParameters))
+            {
+                D3D12_SIGNATURE_PARAMETER_DESC signatureParameterDesc{};
+                shaderReflection->GetInputParameterDesc(parameterIndex, &signatureParameterDesc);
+
+                pipelineReflectionData.inputElementSemanticNames.emplace_back(signatureParameterDesc.SemanticName);
+
+                pipelineReflectionData.inputElementDescs.emplace_back(D3D12_INPUT_ELEMENT_DESC{
+                    .SemanticName = pipelineReflectionData.inputElementSemanticNames.back().c_str(),
+                    .SemanticIndex = signatureParameterDesc.SemanticIndex,
+                    .Format = maskToFormat(signatureParameterDesc.Mask),
+                    .InputSlot = 0u,
+                    .AlignedByteOffset = D3D12_APPEND_ALIGNED_ELEMENT,
+                    .InputSlotClass = D3D12_INPUT_CLASSIFICATION_PER_VERTEX_DATA, // There doesn't seem to be a obvious way to automate this currently.
+                    .InstanceDataStepRate = 0u,
+                });
+            }
+
+            pipelineReflectionData.inputLayoutDesc = {
+                .pInputElementDescs = pipelineReflectionData.inputElementDescs.data(),
+                .NumElements = static_cast<uint32_t>(pipelineReflectionData.inputElementDescs.size()),
+            };
+        }
+
         for (const uint32_t i : std::views::iota(0u, shaderDesc.BoundResources))
         {
             D3D12_SHADER_INPUT_BIND_DESC shaderInputBindDesc{};
             throwIfFailed(shaderReflection->GetResourceBindingDesc(i, &shaderInputBindDesc));
 
-
             if (shaderInputBindDesc.Type == D3D_SIT_CBUFFER)
             {
-                pipeline.rootParameterIndexMap[stringToWString(shaderInputBindDesc.Name)] = pipeline.rootParameters.size();
+                pipelineReflectionData.rootParameterIndexMap[stringToWString(shaderInputBindDesc.Name)] = static_cast<uint32_t>(pipelineReflectionData.rootParameters.size());
                 ID3D12ShaderReflectionConstantBuffer* shaderReflectionConstantBuffer = shaderReflection->GetConstantBufferByIndex(i);
                 D3D12_SHADER_BUFFER_DESC constantBufferDesc{};
                 shaderReflectionConstantBuffer->GetDesc(&constantBufferDesc);
@@ -160,24 +210,30 @@ namespace nether::ShaderCompiler
                     },
                 };
 
-                pipeline.rootParameters.push_back(rootParameter);
+                pipelineReflectionData.rootParameters.push_back(rootParameter);
             }
             else if (shaderInputBindDesc.Type == D3D_SIT_TEXTURE)
             {
-                pipeline.rootParameterIndexMap[stringToWString(shaderInputBindDesc.Name)] = pipeline.rootParameters.size();
-                const CD3DX12_DESCRIPTOR_RANGE1 srvRange(D3D12_DESCRIPTOR_RANGE_TYPE_SRV, 1u, shaderInputBindDesc.BindPoint, shaderInputBindDesc.Space);
-                pipeline.descriptorRanges.push_back(srvRange);
+                // For now, each individual texture belongs in its own descriptor table. This can cause the root signature to quickly exceed the 64WORD size limit.
+                pipelineReflectionData.rootParameterIndexMap[stringToWString(shaderInputBindDesc.Name)] = static_cast<uint32_t>(pipelineReflectionData.rootParameters.size());
+                const CD3DX12_DESCRIPTOR_RANGE1 srvRange(D3D12_DESCRIPTOR_RANGE_TYPE_SRV,
+                                                         1u,
+                                                         shaderInputBindDesc.BindPoint,
+                                                         shaderInputBindDesc.Space,
+                                                         D3D12_DESCRIPTOR_RANGE_FLAG_DATA_STATIC);
+                pipelineReflectionData.descriptorRanges.push_back(srvRange);
 
                 const D3D12_ROOT_PARAMETER1 rootParameter{
                     .ParameterType = D3D12_ROOT_PARAMETER_TYPE_DESCRIPTOR_TABLE,
                     .DescriptorTable =
                         {
                             .NumDescriptorRanges = 1u,
-                            .pDescriptorRanges = &pipeline.descriptorRanges.back(),
+                            .pDescriptorRanges = &pipelineReflectionData.descriptorRanges.back(),
                         },
+                    .ShaderVisibility = D3D12_SHADER_VISIBILITY_PIXEL,
                 };
 
-                pipeline.rootParameters.push_back(rootParameter);
+                pipelineReflectionData.rootParameters.push_back(rootParameter);
             }
         }
 
