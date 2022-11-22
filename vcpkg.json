@@ -7,7 +7,7 @@
     "sdl2",
     "directx-dxc",
     "tinygltf",
-    "stb",
-    "d3dx12"
+    "d3dx12",
+    "stb"
   ]
 }

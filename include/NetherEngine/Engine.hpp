@@ -30,6 +30,8 @@ namespace nether
         void initSyncPrimitives();
         void initSwapchain();
 
+        void initMipMapGenerator();
+
         void initPipelines();
         void initMeshes();
         void initTextures();
@@ -83,16 +85,9 @@ namespace nether
         Comptr<ID3D12Fence1> m_fence{};
         HANDLE m_fenceEvent{};
 
-        Comptr<ID3D12DescriptorHeap> m_rtvDescriptorHeap{};
-        uint32_t m_rtvDescriptorSize{};
-
-        Comptr<ID3D12DescriptorHeap> m_dsvDescriptorHeap{};
-        uint32_t m_dsvDescriptorSize{};
-
-        Comptr<ID3D12DescriptorHeap> m_cbvSrvUavDescriptorHeap{};
-        uint32_t m_cbvSrvUavDescriptorSize{};
-        CD3DX12_CPU_DESCRIPTOR_HANDLE m_currentCbvSrvUavCPUDescriptorHeapHandle{};
-        CD3DX12_GPU_DESCRIPTOR_HANDLE m_currentCbvSrvUavGPUDescriptorHeapHandle{};
+        DescriptorHeap m_rtvDescriptorHeap {};
+        DescriptorHeap m_dsvDescriptorHeap{};
+        DescriptorHeap m_cbvSrvUavDescriptorHeap{};
 
         std::array<Comptr<ID3D12Resource>, FRAME_COUNT> m_backBuffers{};
         Comptr<IDXGISwapChain3> m_swapchain{};
@@ -100,6 +95,8 @@ namespace nether
         Comptr<ID3D12Resource> m_depthStencilTexture{};
 
         std::unordered_map<std::wstring, GraphicsPipeline> m_graphicsPipelines{};
+        ComputePipeline m_mipMapGenerationPipeline{};
+
         std::unordered_map<std::wstring, Mesh> m_meshes{};
         std::unordered_map<std::wstring, Texture> m_textures{};
 
@@ -131,9 +128,8 @@ namespace nether
             .SizeInBytes = sizeof(T),
         };
 
-        m_device->CreateConstantBufferView(&constantBufferConstantBufferViewDesc, m_currentCbvSrvUavCPUDescriptorHeapHandle);
-        m_currentCbvSrvUavCPUDescriptorHeapHandle.Offset(m_cbvSrvUavDescriptorSize);
-        m_currentCbvSrvUavGPUDescriptorHeapHandle.Offset(m_cbvSrvUavDescriptorSize);
+        m_device->CreateConstantBufferView(&constantBufferConstantBufferViewDesc, m_cbvSrvUavDescriptorHeap.currentCpuDescriptorHandle);
+        m_cbvSrvUavDescriptorHeap.offset();
 
         return constantBuffer;
     }

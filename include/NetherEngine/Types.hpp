@@ -16,6 +16,57 @@ struct Vertex
     math::XMFLOAT3 normal{};
 };
 
+struct DescriptorHeap
+{
+    Comptr<ID3D12DescriptorHeap> descriptorHeap{};
+    uint32_t descriptorSize{};
+
+    CD3DX12_CPU_DESCRIPTOR_HANDLE cpuDescriptorHandleFromHeapStart{};
+    CD3DX12_GPU_DESCRIPTOR_HANDLE gpuDescriptorHandleFromHeapStart{};
+
+    CD3DX12_CPU_DESCRIPTOR_HANDLE currentCpuDescriptorHandle{};
+    CD3DX12_GPU_DESCRIPTOR_HANDLE currentGpuDescriptorHandle{};
+
+    void init(ID3D12Device5* device, const D3D12_DESCRIPTOR_HEAP_TYPE heapType, uint32_t descriptorCount, const std::wstring_view descriptorName)
+    {
+        const D3D12_DESCRIPTOR_HEAP_DESC descriptorHeapDesc = {
+            .Type = heapType,
+            .NumDescriptors = descriptorCount,
+            .Flags = ((heapType == D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV) || (heapType == D3D12_DESCRIPTOR_HEAP_TYPE_SAMPLER)) ? D3D12_DESCRIPTOR_HEAP_FLAG_SHADER_VISIBLE
+                                                                                                                : D3D12_DESCRIPTOR_HEAP_FLAG_NONE,
+            .NodeMask = 0u,
+        };
+
+        throwIfFailed(device->CreateDescriptorHeap(&descriptorHeapDesc, IID_PPV_ARGS(&descriptorHeap)));
+
+        descriptorSize = device->GetDescriptorHandleIncrementSize(heapType);
+
+        cpuDescriptorHandleFromHeapStart = descriptorHeap->GetCPUDescriptorHandleForHeapStart();
+        currentCpuDescriptorHandle = descriptorHeap->GetCPUDescriptorHandleForHeapStart();
+
+        if (descriptorHeapDesc.Flags == D3D12_DESCRIPTOR_HEAP_FLAG_SHADER_VISIBLE)
+        {
+            gpuDescriptorHandleFromHeapStart = descriptorHeap->GetGPUDescriptorHandleForHeapStart();
+            currentGpuDescriptorHandle = descriptorHeap->GetGPUDescriptorHandleForHeapStart();
+        }
+    }
+
+    void offset()
+    {
+        currentCpuDescriptorHandle.Offset(descriptorSize);
+        currentGpuDescriptorHandle.Offset(descriptorSize);
+    }
+
+    void offset(CD3DX12_CPU_DESCRIPTOR_HANDLE& cpuDescriptorHandle) { cpuDescriptorHandle.Offset(descriptorSize); }
+    void offset(CD3DX12_GPU_DESCRIPTOR_HANDLE& gpuDescriptorHandle) { gpuDescriptorHandle.Offset(descriptorSize); }
+
+    CD3DX12_CPU_DESCRIPTOR_HANDLE getCpuDescriptorHandleAtIndex(const uint32_t index)
+    {
+        CD3DX12_CPU_DESCRIPTOR_HANDLE descriptorHandle = cpuDescriptorHandleFromHeapStart;
+        return descriptorHandle.Offset(index, descriptorSize);
+    }
+};
+
 // Assumptions : All root parameters will be inline descriptors for now.
 struct Shader
 {
@@ -43,6 +94,15 @@ struct GraphicsPipeline
     Shader pixelShader{};
 
     std::unordered_map<std::wstring, uint32_t> rootParameterIndexMap{};
+};
+
+// For now the compute pipeline does not have any sort of reflection going on.
+struct ComputePipeline
+{
+    Comptr<ID3D12RootSignature> rootSignature{};
+    Comptr<ID3D12PipelineState> pipelineState{};
+
+    Shader computeShader{};
 };
 
 struct VertexBuffer

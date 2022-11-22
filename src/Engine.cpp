@@ -31,6 +31,9 @@ namespace nether
         // Initialize the core DirectX12 and DXGI structures.
         initGraphicsBackend();
 
+        // note(rtarun9) : Move mip map generator from here soon.
+        initMipMapGenerator();
+
         // Initialize and create all the pipelines and root signatures.
         initPipelines();
 
@@ -116,7 +119,7 @@ namespace nether
         Comptr<ID3D12GraphicsCommandList2>& cmd = getCurrentFrameResources().commandList;
 
         // Set pipeline state.
-        const std::array<ID3D12DescriptorHeap*, 1u> shaderVisibleDescriptorHeaps{m_cbvSrvUavDescriptorHeap.Get()};
+        const std::array<ID3D12DescriptorHeap*, 1u> shaderVisibleDescriptorHeaps{m_cbvSrvUavDescriptorHeap.descriptorHeap.Get()};
 
         // Transition back buffer from presentable state to writable (renderable) state.
         const CD3DX12_RESOURCE_BARRIER presentationToRenderTargetBarrier =
@@ -125,8 +128,8 @@ namespace nether
         cmd->ResourceBarrier(1u, &presentationToRenderTargetBarrier);
 
         // Setup render targets and depth stencil views.
-        const CD3DX12_CPU_DESCRIPTOR_HANDLE rtvHandle(m_rtvDescriptorHeap->GetCPUDescriptorHandleForHeapStart(), m_frameIndex, m_rtvDescriptorSize);
-        const CD3DX12_CPU_DESCRIPTOR_HANDLE dsvHandle(m_dsvDescriptorHeap->GetCPUDescriptorHandleForHeapStart());
+        const CD3DX12_CPU_DESCRIPTOR_HANDLE rtvHandle(m_rtvDescriptorHeap.getCpuDescriptorHandleAtIndex(m_frameIndex));
+        const CD3DX12_CPU_DESCRIPTOR_HANDLE dsvHandle(m_dsvDescriptorHeap.cpuDescriptorHandleFromHeapStart);
 
         constexpr std::array<float, 4> clearColor{0.1f, 0.1f, 0.1f, 1.0f};
         cmd->ClearRenderTargetView(rtvHandle, clearColor.data(), 0u, nullptr);
@@ -163,11 +166,9 @@ namespace nether
             cmd->SetGraphicsRootConstantBufferView(lastGraphicsPipeline->rootParameterIndexMap[L"sceneBuffer"],
                                                    getCurrentFrameResources().sceneBuffer.buffer->GetGPUVirtualAddress());
 
-            cmd->SetGraphicsRootConstantBufferView(lastGraphicsPipeline->rootParameterIndexMap[L"transformBuffer"],
-                                                   renderable.transformBuffer.buffer->GetGPUVirtualAddress());
+            cmd->SetGraphicsRootConstantBufferView(lastGraphicsPipeline->rootParameterIndexMap[L"transformBuffer"], renderable.transformBuffer.buffer->GetGPUVirtualAddress());
 
-            cmd->SetGraphicsRootDescriptorTable(lastGraphicsPipeline->rootParameterIndexMap[L"albedoTexture"],
-                                                   m_textures[L"AlbedoTexture"].gpuDescriptorHandle);
+            cmd->SetGraphicsRootDescriptorTable(lastGraphicsPipeline->rootParameterIndexMap[L"albedoTexture"], m_textures[L"AlbedoTexture"].gpuDescriptorHandle);
 
             cmd->DrawIndexedInstanced(36u, 1u, 0u, 0u, 0u);
         }
@@ -318,43 +319,9 @@ namespace nether
     {
         // Create descriptor heaps (i.e contiguous allocations of descriptors. Descriptors describe some resource and
         // specify extra information about it, how it is to be used, etc.
-        const D3D12_DESCRIPTOR_HEAP_DESC rtvDescriptorHeapDesc = {
-            .Type = D3D12_DESCRIPTOR_HEAP_TYPE_RTV,
-            .NumDescriptors = FRAME_COUNT,
-            .Flags = D3D12_DESCRIPTOR_HEAP_FLAG_NONE,
-            .NodeMask = 0u,
-        };
-
-        throwIfFailed(m_device->CreateDescriptorHeap(&rtvDescriptorHeapDesc, IID_PPV_ARGS(&m_rtvDescriptorHeap)));
-        setName(m_rtvDescriptorHeap.Get(), L"RTV descriptor heap");
-
-        m_rtvDescriptorSize = m_device->GetDescriptorHandleIncrementSize(D3D12_DESCRIPTOR_HEAP_TYPE_RTV);
-
-        const D3D12_DESCRIPTOR_HEAP_DESC dsvDescriptorHeapDesc = {
-            .Type = D3D12_DESCRIPTOR_HEAP_TYPE_DSV,
-            .NumDescriptors = 1u,
-            .Flags = D3D12_DESCRIPTOR_HEAP_FLAG_NONE,
-            .NodeMask = 0u,
-        };
-
-        throwIfFailed(m_device->CreateDescriptorHeap(&dsvDescriptorHeapDesc, IID_PPV_ARGS(&m_dsvDescriptorHeap)));
-        setName(m_dsvDescriptorHeap.Get(), L"DSV descriptor heap");
-
-        m_dsvDescriptorSize = m_device->GetDescriptorHandleIncrementSize(D3D12_DESCRIPTOR_HEAP_TYPE_DSV);
-
-        const D3D12_DESCRIPTOR_HEAP_DESC cbvSrvUavDescriptorHeapDesc = {
-            .Type = D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV,
-            .NumDescriptors = 5u,
-            .Flags = D3D12_DESCRIPTOR_HEAP_FLAG_SHADER_VISIBLE,
-            .NodeMask = 0u,
-        };
-
-        throwIfFailed(m_device->CreateDescriptorHeap(&cbvSrvUavDescriptorHeapDesc, IID_PPV_ARGS(&m_cbvSrvUavDescriptorHeap)));
-        setName(m_cbvSrvUavDescriptorHeap.Get(), L"CBV SRV UAV descriptor heap");
-
-        m_cbvSrvUavDescriptorSize = m_device->GetDescriptorHandleIncrementSize(D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV);
-        m_currentCbvSrvUavCPUDescriptorHeapHandle = m_cbvSrvUavDescriptorHeap->GetCPUDescriptorHandleForHeapStart();
-        m_currentCbvSrvUavGPUDescriptorHeapHandle = m_cbvSrvUavDescriptorHeap->GetGPUDescriptorHandleForHeapStart();
+        m_rtvDescriptorHeap.init(m_device.Get(), D3D12_DESCRIPTOR_HEAP_TYPE_RTV, FRAME_COUNT, L"RTV Descriptor Heap");
+        m_dsvDescriptorHeap.init(m_device.Get(), D3D12_DESCRIPTOR_HEAP_TYPE_DSV, 1u, L"DSV Descriptor Heap");
+        m_cbvSrvUavDescriptorHeap.init(m_device.Get(), D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV, 250u, L"CBV SRV UAV Descriptor Heap");
     }
 
     void Engine::initCommandObjects()
@@ -455,7 +422,7 @@ namespace nether
         throwIfFailed(m_factory->CreateSwapChainForHwnd(m_directCommandQueue.Get(), m_windowHandle, &swapchainDesc, nullptr, nullptr, &swapchain));
         throwIfFailed(swapchain.As(&m_swapchain));
 
-        CD3DX12_CPU_DESCRIPTOR_HANDLE rtvHandle(m_rtvDescriptorHeap->GetCPUDescriptorHandleForHeapStart());
+        CD3DX12_CPU_DESCRIPTOR_HANDLE rtvHandle = m_rtvDescriptorHeap.cpuDescriptorHandleFromHeapStart;
 
         // Create the render target views for each swapchain backbuffer..
         for (const uint32_t bufferIndex : std::views::iota(0u, FRAME_COUNT))
@@ -464,7 +431,7 @@ namespace nether
             setName(m_backBuffers[bufferIndex].Get(), L"Back buffer");
 
             m_device->CreateRenderTargetView(m_backBuffers[bufferIndex].Get(), nullptr, rtvHandle);
-            rtvHandle.Offset(1u, m_rtvDescriptorSize);
+            m_rtvDescriptorHeap.offset(rtvHandle);
         }
 
         // Create the Depth stencil buffer and view.
@@ -507,9 +474,91 @@ namespace nether
             },
         };
 
-        const D3D12_CPU_DESCRIPTOR_HANDLE dsvDescriptorHandle = m_dsvDescriptorHeap->GetCPUDescriptorHandleForHeapStart();
+        const D3D12_CPU_DESCRIPTOR_HANDLE dsvDescriptorHandle = m_dsvDescriptorHeap.currentCpuDescriptorHandle;
 
         m_device->CreateDepthStencilView(m_depthStencilTexture.Get(), &dsvDesc, dsvDescriptorHandle);
+    }
+
+    void Engine::initMipMapGenerator()
+    {
+
+        // Set up the mip map generation compute pipeline.
+        Shader mipMapGenerationComputeShader = ShaderCompiler::compile(ShaderTypes::Compute, L"shaders/GenerateMipMaps.hlsl");
+
+        const CD3DX12_DESCRIPTOR_RANGE1 shaderResourceViewDescriptorRange{D3D12_DESCRIPTOR_RANGE_TYPE_SRV, 1u, 0u, 2u};
+        const CD3DX12_DESCRIPTOR_RANGE1 unorderedAccessViewDescriptorRange{D3D12_DESCRIPTOR_RANGE_TYPE_UAV, 4u, 0u, 2u};
+
+        const D3D12_STATIC_SAMPLER_DESC bilinearClampStaticSamplerDesc = {
+            .Filter = D3D12_FILTER_MIN_MAG_MIP_LINEAR,
+            .AddressU = D3D12_TEXTURE_ADDRESS_MODE_CLAMP,
+            .AddressV = D3D12_TEXTURE_ADDRESS_MODE_CLAMP,
+            .AddressW = D3D12_TEXTURE_ADDRESS_MODE_CLAMP,
+            .MipLODBias = 0,
+            .MaxAnisotropy = 0,
+            .ComparisonFunc = D3D12_COMPARISON_FUNC_NEVER,
+            .BorderColor = D3D12_STATIC_BORDER_COLOR_TRANSPARENT_BLACK,
+            .MinLOD = 0.0f,
+            .MaxLOD = D3D12_FLOAT32_MAX,
+            .ShaderRegister = 0,
+            .RegisterSpace = 2,
+            .ShaderVisibility = D3D12_SHADER_VISIBILITY_ALL,
+        };
+
+        CD3DX12_ROOT_PARAMETER1 shaderResourceViewDescriptorTable{};
+        shaderResourceViewDescriptorTable.InitAsDescriptorTable(1u, &shaderResourceViewDescriptorRange);
+
+        CD3DX12_ROOT_PARAMETER1 unorderedAccessViewDescriptorTable{};
+        unorderedAccessViewDescriptorTable.InitAsDescriptorTable(1u, &unorderedAccessViewDescriptorRange);
+
+        CD3DX12_ROOT_PARAMETER1 constantBufferInlineDescriptor{};
+        constantBufferInlineDescriptor.InitAsConstantBufferView(0u, 2u);
+
+        const std::array<CD3DX12_ROOT_PARAMETER1, 3> computeShaderRootParameters = {
+            constantBufferInlineDescriptor,
+            shaderResourceViewDescriptorTable,
+            unorderedAccessViewDescriptorTable,
+        };
+
+        const D3D12_VERSIONED_ROOT_SIGNATURE_DESC computeShaderRootSignaureDesc = {
+            .Version = D3D_ROOT_SIGNATURE_VERSION_1_1,
+            .Desc_1_1 =
+                {
+                    .NumParameters = static_cast<uint32_t>(computeShaderRootParameters.size()),
+                    .pParameters = computeShaderRootParameters.data(),
+                    .NumStaticSamplers = 1u,
+                    .pStaticSamplers = &bilinearClampStaticSamplerDesc,
+                },
+        };
+
+        Comptr<ID3DBlob> rootSignatureBlob{};
+        Comptr<ID3DBlob> errorBlob{};
+
+        throwIfFailed(::D3D12SerializeVersionedRootSignature(&computeShaderRootSignaureDesc, &rootSignatureBlob, &errorBlob));
+        if (errorBlob)
+        {
+            const char* errorMessage = (const char*)errorBlob->GetBufferPointer();
+            fatalError(errorMessage);
+        }
+
+        throwIfFailed(
+            m_device->CreateRootSignature(0u, rootSignatureBlob->GetBufferPointer(), rootSignatureBlob->GetBufferSize(), IID_PPV_ARGS(&m_mipMapGenerationPipeline.rootSignature)));
+        setName(m_mipMapGenerationPipeline.rootSignature.Get(), L" Mip Map Generation Root signature");
+
+        const D3D12_SHADER_BYTECODE computeShaderByteCode = {
+            .pShaderBytecode = mipMapGenerationComputeShader.shaderBlob->GetBufferPointer(),
+            .BytecodeLength = mipMapGenerationComputeShader.shaderBlob->GetBufferSize(),
+        };
+
+        // Setup compute pipeline state.
+
+        const D3D12_COMPUTE_PIPELINE_STATE_DESC computePipelineStateDesc = {
+            .pRootSignature = m_mipMapGenerationPipeline.rootSignature.Get(),
+            .CS = computeShaderByteCode,
+            .NodeMask = 0u,
+        };
+
+        throwIfFailed(m_device->CreateComputePipelineState(&computePipelineStateDesc, IID_PPV_ARGS(&m_mipMapGenerationPipeline.pipelineState)));
+        setName(m_mipMapGenerationPipeline.pipelineState.Get(), L"Mip Map Generation Pipeline State");
     }
 
     void Engine::initPipelines()
@@ -620,10 +669,7 @@ namespace nether
 
     void Engine::initMeshes() { m_meshes[L"CubeMesh"] = createMesh("assets/Cube/glTF/Cube.gltf"); }
 
-    void Engine::initTextures()
-    {
-        m_textures[L"AlbedoTexture"] = createTexture("assets/Cube/glTF/Cube_BaseColor.png", DXGI_FORMAT_R8G8B8A8_UNORM_SRGB, L"Albedo Texture");
-    }
+    void Engine::initTextures() { m_textures[L"AlbedoTexture"] = createTexture("assets/Cube/glTF/Cube_BaseColor.png", DXGI_FORMAT_R8G8B8A8_UNORM_SRGB, L"Albedo Texture"); }
 
     void Engine::initScene()
     {
@@ -775,9 +821,7 @@ namespace nether
 
         // Transition to pixel shader resource format, as SRV requires texture to be in this format.
         const CD3DX12_RESOURCE_BARRIER copyDestToPixelShaderResourceBarrier =
-            CD3DX12_RESOURCE_BARRIER::Transition(texture.texture.Get(),
-                                                 D3D12_RESOURCE_STATE_COPY_DEST,
-                                                 D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
+            CD3DX12_RESOURCE_BARRIER::Transition(texture.texture.Get(), D3D12_RESOURCE_STATE_COPY_DEST, D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
 
         // Create the shader resource view for the texture.
         const D3D12_SHADER_RESOURCE_VIEW_DESC shaderResourceViewDesc = {
@@ -789,11 +833,11 @@ namespace nether
             },
         };
 
-        m_device->CreateShaderResourceView(texture.texture.Get(), &shaderResourceViewDesc, m_currentCbvSrvUavCPUDescriptorHeapHandle);
-        m_currentCbvSrvUavCPUDescriptorHeapHandle.Offset(m_cbvSrvUavDescriptorSize);
+        m_device->CreateShaderResourceView(texture.texture.Get(), &shaderResourceViewDesc, m_cbvSrvUavDescriptorHeap.currentCpuDescriptorHandle);
 
-        texture.gpuDescriptorHandle = m_currentCbvSrvUavGPUDescriptorHeapHandle;
-        m_currentCbvSrvUavGPUDescriptorHeapHandle.Offset(m_cbvSrvUavDescriptorSize);
+        texture.gpuDescriptorHandle = m_cbvSrvUavDescriptorHeap.currentGpuDescriptorHandle;
+
+        m_cbvSrvUavDescriptorHeap.offset();
 
         setName(texture.texture.Get(), textureName);
         return texture;
