@@ -13,6 +13,16 @@
 #define TINYGLTF_NO_EXTERNAL_IMAGE
 #include <tiny_gltf.h>
 
+// Setup the Agility SDK parameters.
+extern "C"
+{
+    __declspec(dllexport) extern const UINT D3D12SDKVersion = 602u;
+}
+extern "C"
+{
+    __declspec(dllexport) extern const char* D3D12SDKPath = ".\\D3D12\\";
+}
+
 namespace nether
 {
     Engine::~Engine()
@@ -32,7 +42,7 @@ namespace nether
         initGraphicsBackend();
 
         // note(rtarun9) : Move mip map generator from here soon.
-        initMipMapGenerator();
+        // initMipMapGenerator();
 
         // Initialize and create all the pipelines and root signatures.
         initPipelines();
@@ -139,7 +149,6 @@ namespace nether
 
         cmd->RSSetViewports(1u, &m_viewport);
         cmd->RSSetScissorRects(1u, &m_scissorRect);
-        cmd->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
 
         GraphicsPipeline* lastGraphicsPipeline{};
         Mesh* lastMesh{};
@@ -150,25 +159,44 @@ namespace nether
             {
                 lastGraphicsPipeline = renderable.graphicsPipeline;
 
+                cmd->SetDescriptorHeaps(static_cast<uint32_t>(shaderVisibleDescriptorHeaps.size()), shaderVisibleDescriptorHeaps.data());
+
                 cmd->SetGraphicsRootSignature(lastGraphicsPipeline->rootSignature.Get());
                 cmd->SetPipelineState(lastGraphicsPipeline->pipelineState.Get());
-                cmd->SetDescriptorHeaps(static_cast<uint32_t>(shaderVisibleDescriptorHeaps.size()), shaderVisibleDescriptorHeaps.data());
             }
 
             if (lastMesh != renderable.mesh)
             {
                 lastMesh = renderable.mesh;
 
-                cmd->IASetVertexBuffers(0u, 1u, &lastMesh->vertexBuffer.vertexBufferView);
+                cmd->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
                 cmd->IASetIndexBuffer(&lastMesh->indexBuffer.indexBufferView);
             }
 
-            cmd->SetGraphicsRootConstantBufferView(lastGraphicsPipeline->rootParameterIndexMap[L"sceneBuffer"],
-                                                   getCurrentFrameResources().sceneBuffer.buffer->GetGPUVirtualAddress());
+            struct VertexShaderRenderResources
+            {
+                uint32_t positionBufferIndex{};
+                uint32_t textureCoordBufferIndex{};
+                uint32_t normalBufferIndex{};
 
-            cmd->SetGraphicsRootConstantBufferView(lastGraphicsPipeline->rootParameterIndexMap[L"transformBuffer"], renderable.transformBuffer.buffer->GetGPUVirtualAddress());
+                uint32_t sceneBufferIndex{};
+                uint32_t transformBufferIndex{};
 
-            cmd->SetGraphicsRootDescriptorTable(lastGraphicsPipeline->rootParameterIndexMap[L"albedoTexture"], m_textures[L"AlbedoTexture"].gpuDescriptorHandle);
+                uint32_t albedoTextureIndex{};
+            };
+
+            const VertexShaderRenderResources vertexShaderRenderResources = {
+                .positionBufferIndex = lastMesh->positionBuffer.srvIndex,
+                .textureCoordBufferIndex = lastMesh->textureCoordBuffer.srvIndex,
+                .normalBufferIndex = lastMesh->normalBuffer.srvIndex,
+
+                .sceneBufferIndex = getCurrentFrameResources().sceneBuffer.srvIndex,
+                .transformBufferIndex = renderable.transformBuffer.srvIndex,
+
+                .albedoTextureIndex = m_textures[L"AlbedoTexture"].srvIndex,
+            };
+
+            cmd->SetGraphicsRoot32BitConstants(0u, 64u, &vertexShaderRenderResources, 0u);
 
             cmd->DrawIndexedInstanced(36u, 1u, 0u, 0u, 0u);
         }
@@ -564,13 +592,10 @@ namespace nether
     void Engine::initPipelines()
     {
         // Setup the root signature. RS specifies what is the layout that resources are used in the shaders.
-        // Root signature parameters are determined by shader reflection.
-
-        GraphicsPipelineReflectionData pipelineReflectionData{};
 
         // Setup shaders.
-        const Shader vertexShader = ShaderCompiler::compile(ShaderTypes::Vertex, L"shaders/TestShader.hlsl", pipelineReflectionData);
-        const Shader pixelShader = ShaderCompiler::compile(ShaderTypes::Pixel, L"shaders/TestShader.hlsl", pipelineReflectionData);
+        const Shader vertexShader = ShaderCompiler::compile(ShaderTypes::Vertex, L"shaders/TestShader.hlsl");
+        const Shader pixelShader = ShaderCompiler::compile(ShaderTypes::Pixel, L"shaders/TestShader.hlsl");
 
         // Setup default (test) static sampler.
         const D3D12_STATIC_SAMPLER_DESC staticSamplerDesc = {
@@ -589,21 +614,28 @@ namespace nether
             .ShaderVisibility = D3D12_SHADER_VISIBILITY_PIXEL,
         };
 
+        const D3D12_ROOT_PARAMETER1 rootParameters = {
+            .ParameterType = D3D12_ROOT_PARAMETER_TYPE_32BIT_CONSTANTS,
+            .Constants =
+                {
+                    .ShaderRegister = 0u,
+                    .RegisterSpace = 0u,
+                    .Num32BitValues = 64,
+                },
+            .ShaderVisibility = D3D12_SHADER_VISIBILITY_ALL,
+        };
+
         const D3D12_VERSIONED_ROOT_SIGNATURE_DESC rootSignaureDesc = {
             .Version = D3D_ROOT_SIGNATURE_VERSION_1_1,
             .Desc_1_1 =
                 {
-                    .NumParameters = static_cast<uint32_t>(pipelineReflectionData.rootParameters.size()),
-                    .pParameters = pipelineReflectionData.rootParameters.data(),
+                    .NumParameters = 1u,
+                    .pParameters = &rootParameters,
                     .NumStaticSamplers = 1u,
                     .pStaticSamplers = &staticSamplerDesc,
-                    .Flags = D3D12_ROOT_SIGNATURE_FLAG_ALLOW_INPUT_ASSEMBLER_INPUT_LAYOUT,
+                    .Flags = D3D12_ROOT_SIGNATURE_FLAG_CBV_SRV_UAV_HEAP_DIRECTLY_INDEXED | D3D12_ROOT_SIGNATURE_FLAG_SAMPLER_HEAP_DIRECTLY_INDEXED,
                 },
         };
-
-        m_graphicsPipelines[L"BasePipeline"].vertexShader = vertexShader;
-        m_graphicsPipelines[L"BasePipeline"].pixelShader = pixelShader;
-        m_graphicsPipelines[L"BasePipeline"].rootParameterIndexMap = pipelineReflectionData.rootParameterIndexMap;
 
         Comptr<ID3DBlob> rootSignatureBlob{};
         Comptr<ID3DBlob> errorBlob{};
@@ -630,7 +662,6 @@ namespace nether
         const D3D12_SHADER_BYTECODE pixelShaderByteCode = {
             .pShaderBytecode = pixelShader.shaderBlob->GetBufferPointer(),
             .BytecodeLength = pixelShader.shaderBlob->GetBufferSize(),
-
         };
 
         // Setup graphics pipeline state.
@@ -653,7 +684,6 @@ namespace nether
             .SampleMask = UINT_MAX,
             .RasterizerState = defaultRasterizerDesc,
             .DepthStencilState = depthStencilDesc,
-            .InputLayout = pipelineReflectionData.inputLayoutDesc,
             .PrimitiveTopologyType = D3D12_PRIMITIVE_TOPOLOGY_TYPE_TRIANGLE,
             .NumRenderTargets = 1u,
             .RTVFormats = DXGI_FORMAT_R8G8B8A8_UNORM,
@@ -836,42 +866,12 @@ namespace nether
         m_device->CreateShaderResourceView(texture.texture.Get(), &shaderResourceViewDesc, m_cbvSrvUavDescriptorHeap.currentCpuDescriptorHandle);
 
         texture.gpuDescriptorHandle = m_cbvSrvUavDescriptorHeap.currentGpuDescriptorHandle;
+        texture.srvIndex = m_cbvSrvUavDescriptorHeap.currentDescriptorIndex;
 
         m_cbvSrvUavDescriptorHeap.offset();
 
         setName(texture.texture.Get(), textureName);
         return texture;
-    }
-
-    VertexBuffer Engine::createVertexBuffer(const std::byte* data, const uint32_t bufferSize, const std::wstring_view vertexBufferName)
-    {
-        VertexBuffer vertexBuffer{};
-
-        // Setup the resource desc for buffer creation.
-        const D3D12_RESOURCE_DESC vertexBufferResourceDesc = {
-            .Dimension = D3D12_RESOURCE_DIMENSION_BUFFER,
-            .Alignment = 0u,
-            .Width = bufferSize,
-            .Height = 1u,
-            .DepthOrArraySize = 1u,
-            .MipLevels = 1u,
-            .Format = DXGI_FORMAT_UNKNOWN,
-            .SampleDesc = {1u, 0u},
-            .Layout = D3D12_TEXTURE_LAYOUT_ROW_MAJOR,
-            .Flags = D3D12_RESOURCE_FLAG_NONE,
-        };
-
-        vertexBuffer.buffer = createBuffer(vertexBufferResourceDesc, data, vertexBufferName);
-
-        vertexBuffer.vertexBufferView = {
-            .BufferLocation = vertexBuffer.buffer->GetGPUVirtualAddress(),
-            .SizeInBytes = bufferSize,
-            .StrideInBytes = sizeof(Vertex),
-        };
-
-        vertexBuffer.verticesCount = static_cast<uint32_t>(bufferSize / sizeof(Vertex));
-
-        return vertexBuffer;
     }
 
     IndexBuffer Engine::createIndexBuffer(const std::byte* data, const uint32_t bufferSize, const std::wstring_view indexBufferName)
@@ -903,6 +903,47 @@ namespace nether
         return indexBuffer;
     }
 
+    StructuredBuffer Engine::createStructuredBuffer(const std::byte* data, const uint32_t numberOfComponents, const uint32_t stride, const std::wstring_view bufferName)
+    {
+        StructuredBuffer structuredBuffer{};
+
+        // Setup the resource desc for buffer creation.
+        const D3D12_RESOURCE_DESC structuredBufferResourceDesc = {
+            .Dimension = D3D12_RESOURCE_DIMENSION_BUFFER,
+            .Alignment = 0u,
+            .Width = numberOfComponents *  stride,
+            .Height = 1u,
+            .DepthOrArraySize = 1u,
+            .MipLevels = 1u,
+            .Format = DXGI_FORMAT_UNKNOWN,
+            .SampleDesc = {1u, 0u},
+            .Layout = D3D12_TEXTURE_LAYOUT_ROW_MAJOR,
+            .Flags = D3D12_RESOURCE_FLAG_NONE,
+        };
+
+        structuredBuffer.buffer = createBuffer(structuredBufferResourceDesc, data, bufferName);
+
+        // Create the shader resource view.
+        const D3D12_SHADER_RESOURCE_VIEW_DESC shaderResourceViewDesc = {
+            .Format = DXGI_FORMAT_UNKNOWN,
+            .ViewDimension = D3D12_SRV_DIMENSION_BUFFER,
+            .Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING,
+            .Buffer =
+                {
+                    .FirstElement = 0u,
+                    .NumElements = numberOfComponents,
+                    .StructureByteStride = stride,
+                },
+        };
+
+        m_device->CreateShaderResourceView(structuredBuffer.buffer.Get(), &shaderResourceViewDesc, m_cbvSrvUavDescriptorHeap.currentCpuDescriptorHandle);
+        structuredBuffer.srvIndex = m_cbvSrvUavDescriptorHeap.currentDescriptorIndex;
+
+        m_cbvSrvUavDescriptorHeap.offset();
+
+        return structuredBuffer;
+    }
+
     Mesh Engine::createMesh(const std::string_view modelPath)
     {
         // Use tinygltf loader to load the model.
@@ -931,14 +972,16 @@ namespace nether
 
         // Build meshes.
         const tinygltf::Scene& scene = model.scenes[model.defaultScene];
-
+         
         tinygltf::Node& node = model.nodes[0u];
         node.mesh = std::max<int32_t>(0u, node.mesh);
 
         const tinygltf::Mesh& nodeMesh = model.meshes[node.mesh];
 
-        // note(rtarun9) : for now have all vertices in single vertex buffer. Same for index buffer.
-        std::vector<Vertex> vertices{};
+        std::vector<math::XMFLOAT3> positionData{};
+        std::vector<math::XMFLOAT2> textureCoordData{};
+        std::vector<math::XMFLOAT3> normalData{};
+
         std::vector<uint32_t> indices{};
 
         for (size_t i = 0; i < nodeMesh.primitives.size(); ++i)
@@ -973,6 +1016,10 @@ namespace nether
             const int normalByteStride = normalAccesor.ByteStride(normalBufferView);
             uint8_t const* const normals = &normalBuffer.data[normalBufferView.byteOffset + normalAccesor.byteOffset];
 
+            positionData.reserve(positionAccesor.count);
+            textureCoordData.reserve(textureCoordAccesor.count);
+            normalData.reserve(normalAccesor.count);
+
             // Fill in the vertices's array.
             for (size_t i : std::views::iota(0u, positionAccesor.count))
             {
@@ -991,8 +1038,9 @@ namespace nether
                     (reinterpret_cast<float const*>(normals + (i * normalByteStride)))[2],
                 };
 
-                // note(rtarun9) : using normals as colors for now, until texture loading is implemented.
-                vertices.emplace_back(Vertex{position, textureCoord, normal});
+                positionData.emplace_back(position);
+                textureCoordData.emplace_back(textureCoord);
+                normalData.emplace_back(normal);
             }
 
             // Get the index buffer data.
@@ -1016,11 +1064,19 @@ namespace nether
         }
 
         const uint32_t indexBufferSize = static_cast<uint32_t>(indices.size() * sizeof(uint32_t));
-        const uint32_t vertexBufferSize = static_cast<uint32_t>(vertices.size() * sizeof(Vertex));
 
         Mesh mesh{};
         mesh.indexBuffer = createIndexBuffer(reinterpret_cast<const std::byte*>(indices.data()), indexBufferSize, stringToWString(modelPath) + std::wstring(L" Index buffer"));
-        mesh.vertexBuffer = createVertexBuffer(reinterpret_cast<const std::byte*>(vertices.data()), vertexBufferSize, stringToWString(modelPath) + std::wstring(L" Vertex buffer"));
+
+        mesh.positionBuffer =
+            createStructuredBuffer(reinterpret_cast<const std::byte*>(positionData.data()), static_cast<uint32_t>(positionData.size()), sizeof(math::XMFLOAT3), stringToWString(modelPath) + std::wstring(L" Position buffer"));
+      
+        mesh.textureCoordBuffer = createStructuredBuffer(reinterpret_cast<const std::byte*>(textureCoordData.data()),
+                                                         static_cast<uint32_t>(textureCoordData.size()),
+                                                         sizeof(math::XMFLOAT2),
+                                                         stringToWString(modelPath) + std::wstring(L" Texture Coord buffer"));
+        mesh.normalBuffer =
+            createStructuredBuffer(reinterpret_cast<const std::byte*>(normalData.data()), static_cast<uint32_t>(normalData.size()), sizeof(math::XMFLOAT3), stringToWString(modelPath) + std::wstring(L" Normal buffer"));
 
         return mesh;
     }

@@ -8,14 +8,6 @@ struct Uint2
     auto operator<=>(const Uint2& other) const = default;
 };
 
-// If multiple vertex types are to be used, then a different logic for create buffer must be used (best option is using std::span<> and templates).
-struct Vertex
-{
-    math::XMFLOAT3 position{};
-    math::XMFLOAT2 textureCoord{};
-    math::XMFLOAT3 normal{};
-};
-
 struct DescriptorHeap
 {
     Comptr<ID3D12DescriptorHeap> descriptorHeap{};
@@ -26,6 +18,8 @@ struct DescriptorHeap
 
     CD3DX12_CPU_DESCRIPTOR_HANDLE currentCpuDescriptorHandle{};
     CD3DX12_GPU_DESCRIPTOR_HANDLE currentGpuDescriptorHandle{};
+
+    uint32_t currentDescriptorIndex{};
 
     void init(ID3D12Device5* device, const D3D12_DESCRIPTOR_HEAP_TYPE heapType, uint32_t descriptorCount, const std::wstring_view descriptorName)
     {
@@ -53,6 +47,8 @@ struct DescriptorHeap
 
     void offset()
     {
+        currentDescriptorIndex++;
+
         currentCpuDescriptorHandle.Offset(descriptorSize);
         currentGpuDescriptorHandle.Offset(descriptorSize);
     }
@@ -73,27 +69,10 @@ struct Shader
     Comptr<IDxcBlob> shaderBlob{};
 };
 
-struct GraphicsPipelineReflectionData
-{
-    std::vector<D3D12_DESCRIPTOR_RANGE1> descriptorRanges{};
-    std::vector<D3D12_ROOT_PARAMETER1> rootParameters{};
-    std::unordered_map<std::wstring, uint32_t> rootParameterIndexMap{};
-
-    std::vector<std::string>
-        inputElementSemanticNames{}; // For some C++ scope - rule, semantic names of the input elements descs go out of scope after leaving the shader compile function.
-    std::vector<D3D12_INPUT_ELEMENT_DESC> inputElementDescs;
-    D3D12_INPUT_LAYOUT_DESC inputLayoutDesc{};
-};
-
 struct GraphicsPipeline
 {
     Comptr<ID3D12RootSignature> rootSignature{};
     Comptr<ID3D12PipelineState> pipelineState{};
-
-    Shader vertexShader{};
-    Shader pixelShader{};
-
-    std::unordered_map<std::wstring, uint32_t> rootParameterIndexMap{};
 };
 
 // For now the compute pipeline does not have any sort of reflection going on.
@@ -118,9 +97,18 @@ struct IndexBuffer
     D3D12_INDEX_BUFFER_VIEW indexBufferView{};
 };
 
+struct StructuredBuffer
+{
+    Comptr<ID3D12Resource> buffer{};
+    uint32_t srvIndex{};
+};
+
 struct Mesh
 {
-    VertexBuffer vertexBuffer{};
+    StructuredBuffer positionBuffer{};
+    StructuredBuffer textureCoordBuffer{};
+    StructuredBuffer normalBuffer{};
+
     IndexBuffer indexBuffer{};
 };
 
@@ -128,6 +116,7 @@ struct Texture
 {
     Comptr<ID3D12Resource> texture{};
     D3D12_GPU_DESCRIPTOR_HANDLE gpuDescriptorHandle{};
+    uint32_t srvIndex{};
 };
 
 template <typename T> struct ConstantBuffer
@@ -135,6 +124,7 @@ template <typename T> struct ConstantBuffer
     Comptr<ID3D12Resource> buffer{};
     T data{};
     uint8_t* bufferPointer{};
+    uint32_t srvIndex{};
 
     void update()
     {

@@ -45,13 +45,15 @@ namespace nether
 
         [[nodiscard]] Texture createTexture(const std::string_view texturePath, const DXGI_FORMAT& format, const std::wstring_view textureName);
 
-        // Helper functions for creating specific types of buffers (vertex, index, constant etc). Might be removed eventually, or made into templated functions.
-        [[nodiscard]] VertexBuffer createVertexBuffer(const std::byte* data, const uint32_t bufferSize, const std::wstring_view vertexBufferName);
+        // Helper functions for creating specific types of buffers (structured byffer, index, constant etc). Might be removed eventually, or made into templated functions.
         [[nodiscard]] IndexBuffer createIndexBuffer(const std::byte* data, const uint32_t bufferSize, const std::wstring_view indexBufferName);
+        [[nodiscard]] StructuredBuffer createStructuredBuffer(const std::byte* data, const uint32_t numberOfComponents, const uint32_t stride, const std::wstring_view bufferName);
+        template <typename T> [[nodiscard]] ConstantBuffer<T> createConstantBuffer(const std::wstring_view constantBufferName);
+
+
 
         [[nodiscard]] Mesh createMesh(const std::string_view meshPath);
 
-        template <typename T> [[nodiscard]] ConstantBuffer<T> createConstantBuffer(const std::wstring_view constantBufferName);
 
       public:
         static constexpr uint32_t FRAME_COUNT = 2u;
@@ -129,6 +131,9 @@ namespace nether
         };
 
         m_device->CreateConstantBufferView(&constantBufferConstantBufferViewDesc, m_cbvSrvUavDescriptorHeap.currentCpuDescriptorHandle);
+
+        constantBuffer.srvIndex = m_cbvSrvUavDescriptorHeap.currentDescriptorIndex;
+
         m_cbvSrvUavDescriptorHeap.offset();
 
         return constantBuffer;

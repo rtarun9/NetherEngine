@@ -16,7 +16,7 @@ namespace nether
 namespace nether::ShaderCompiler
 {
     // Takes a Pipeline object as inout parameter to setup shader reflection data.
-    Shader compile(const ShaderTypes& shaderType, const std::wstring_view shaderPath, GraphicsPipelineReflectionData& pipelineReflectionData);
+    Shader compile(const ShaderTypes& shaderType, const std::wstring_view shaderPath);
 
     Shader compile(const ShaderTypes& shaderType, const std::wstring_view shaderPath);
 }
