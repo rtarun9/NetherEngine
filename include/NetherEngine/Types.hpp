@@ -21,13 +21,23 @@ struct DescriptorHeap
 
     uint32_t currentDescriptorIndex{};
 
-    void init(ID3D12Device5* device, const D3D12_DESCRIPTOR_HEAP_TYPE heapType, uint32_t descriptorCount, const std::wstring_view descriptorName)
+    void init(ID3D12Device5* const device, const D3D12_DESCRIPTOR_HEAP_TYPE heapType, uint32_t descriptorCount, const std::wstring_view descriptorName)
     {
+        const D3D12_DESCRIPTOR_HEAP_FLAGS descriptorHeapFlag =
+            [=]()
+        {
+            if ((heapType == D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV) || (heapType == D3D12_DESCRIPTOR_HEAP_TYPE_SAMPLER))
+            {
+                return D3D12_DESCRIPTOR_HEAP_FLAG_SHADER_VISIBLE;
+            }
+
+            return D3D12_DESCRIPTOR_HEAP_FLAG_NONE;
+        }();
+
         const D3D12_DESCRIPTOR_HEAP_DESC descriptorHeapDesc = {
             .Type = heapType,
             .NumDescriptors = descriptorCount,
-            .Flags = ((heapType == D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV) || (heapType == D3D12_DESCRIPTOR_HEAP_TYPE_SAMPLER)) ? D3D12_DESCRIPTOR_HEAP_FLAG_SHADER_VISIBLE
-                                                                                                                : D3D12_DESCRIPTOR_HEAP_FLAG_NONE,
+            .Flags = ((heapType == D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV) || (heapType == D3D12_DESCRIPTOR_HEAP_TYPE_SAMPLER)) ? D3D12_DESCRIPTOR_HEAP_FLAG_SHADER_VISIBLE                                                                 : D3D12_DESCRIPTOR_HEAP_FLAG_NONE,
             .NodeMask = 0u,
         };
 
@@ -53,17 +63,16 @@ struct DescriptorHeap
         currentGpuDescriptorHandle.Offset(descriptorSize);
     }
 
-    void offset(CD3DX12_CPU_DESCRIPTOR_HANDLE& cpuDescriptorHandle) { cpuDescriptorHandle.Offset(descriptorSize); }
-    void offset(CD3DX12_GPU_DESCRIPTOR_HANDLE& gpuDescriptorHandle) { gpuDescriptorHandle.Offset(descriptorSize); }
+    void offset(CD3DX12_CPU_DESCRIPTOR_HANDLE& cpuDescriptorHandle) const { cpuDescriptorHandle.Offset(descriptorSize); }
+    void offset(CD3DX12_GPU_DESCRIPTOR_HANDLE& gpuDescriptorHandle) const { gpuDescriptorHandle.Offset(descriptorSize); }
 
-    CD3DX12_CPU_DESCRIPTOR_HANDLE getCpuDescriptorHandleAtIndex(const uint32_t index)
+    CD3DX12_CPU_DESCRIPTOR_HANDLE getCpuDescriptorHandleAtIndex(const uint32_t index) const
     {
         CD3DX12_CPU_DESCRIPTOR_HANDLE descriptorHandle = cpuDescriptorHandleFromHeapStart;
         return descriptorHandle.Offset(index, descriptorSize);
     }
 };
 
-// Assumptions : All root parameters will be inline descriptors for now.
 struct Shader
 {
     Comptr<IDxcBlob> shaderBlob{};
@@ -71,24 +80,12 @@ struct Shader
 
 struct GraphicsPipeline
 {
-    Comptr<ID3D12RootSignature> rootSignature{};
     Comptr<ID3D12PipelineState> pipelineState{};
 };
 
-// For now the compute pipeline does not have any sort of reflection going on.
 struct ComputePipeline
 {
-    Comptr<ID3D12RootSignature> rootSignature{};
     Comptr<ID3D12PipelineState> pipelineState{};
-
-    Shader computeShader{};
-};
-
-struct VertexBuffer
-{
-    uint32_t verticesCount{};
-    Comptr<ID3D12Resource> buffer{};
-    D3D12_VERTEX_BUFFER_VIEW vertexBufferView{};
 };
 
 struct IndexBuffer
@@ -145,18 +142,29 @@ template <typename T> struct ConstantBuffer
 struct alignas(256) TransformData
 {
     math::XMMATRIX modelMatrix{};
+    math::XMMATRIX inverseModelViewMatrix{};
 };
 
 struct Renderable
 {
     Mesh* mesh{};
     GraphicsPipeline* graphicsPipeline{};
+
+    math::XMFLOAT3 rotate{0.0f, 0.0f, 0.0f};
+    math::XMFLOAT3 scale{1.0f, 1.0f, 1.0f};
+    math::XMFLOAT3 translate{0.0f, 0.0f, 0.0f};
+
     ConstantBuffer<TransformData> transformBuffer{};
 };
 
 struct alignas(256) SceneData
 {
+    math::XMMATRIX viewMatrix{};
     math::XMMATRIX viewProjectionMatrix{};
+    math::XMFLOAT3 lightColor{1.0f, 1.0f, 1.0f};
+    float padding{};
+    math::XMFLOAT3 viewSpaceLightPosition{};
+    float padding2{};
 };
 
 struct FrameResources

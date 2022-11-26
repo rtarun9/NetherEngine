@@ -13,6 +13,10 @@
 #define TINYGLTF_NO_EXTERNAL_IMAGE
 #include <tiny_gltf.h>
 
+#include <imgui.h>
+#include <imgui_impl_dx12.h>
+#include <imgui_impl_sdl.h>
+
 // Setup the Agility SDK parameters.
 extern "C"
 {
@@ -29,6 +33,10 @@ namespace nether
     {
         flushGPU();
 
+        ImGui_ImplDX12_Shutdown();
+        ImGui_ImplSDL2_Shutdown();
+        ImGui::DestroyContext();
+
         SDL_DestroyWindow(m_window);
         SDL_Quit();
     }
@@ -41,8 +49,8 @@ namespace nether
         // Initialize the core DirectX12 and DXGI structures.
         initGraphicsBackend();
 
-        // note(rtarun9) : Move mip map generator from here soon.
-        // initMipMapGenerator();
+        // Initialize ImGui.
+        initImgui();
 
         // Initialize and create all the pipelines and root signatures.
         initPipelines();
@@ -68,6 +76,8 @@ namespace nether
             SDL_Event event{};
             while (SDL_PollEvent(&event))
             {
+                ImGui_ImplSDL2_ProcessEvent(&event);
+
                 if (event.type == SDL_QUIT)
                 {
                     quit = true;
@@ -105,22 +115,71 @@ namespace nether
     {
         m_camera.update(deltaTime);
 
-        m_renderables[L"Cube"].transformBuffer.data = {
-            .modelMatrix = math::XMMatrixIdentity(),
-        };
+        for (auto& [name, renderable] : m_renderables)
+        {
+            renderable.transformBuffer.data = {
+                .modelMatrix = math::XMMatrixRotationX(renderable.rotate.x) * math::XMMatrixRotationY(renderable.rotate.y) * math::XMMatrixRotationZ(renderable.rotate.z) *
+                               math::XMMatrixScaling(renderable.scale.x, renderable.scale.y, renderable.scale.z) *
+                               math::XMMatrixTranslation(renderable.translate.x, renderable.translate.y, renderable.translate.z),
+            };
 
-        m_renderables[L"Cube"].transformBuffer.update();
+            renderable.transformBuffer.data.inverseModelViewMatrix =
+                math::XMMatrixInverse(nullptr, math::XMMatrixMultiply(renderable.transformBuffer.data.modelMatrix, m_camera.getLookAtMatrix()));
+
+            renderable.transformBuffer.update();
+        }
+
+        // Calculate viewspace light position.
+        const math::XMVECTOR lightPosition = math::XMLoadFloat3(&m_renderables[L"Light"].translate);
+        const math::XMVECTOR viewSpaceLightPosition = math::XMVector3TransformCoord(lightPosition, m_camera.getLookAtMatrix());
+        math::XMFLOAT3 viewSpaceLightPositionFloat3{};
+        math::XMStoreFloat3(&viewSpaceLightPositionFloat3, viewSpaceLightPosition);
 
         getCurrentFrameResources().sceneBuffer.data = {
+            .viewMatrix = m_camera.getLookAtMatrix(),
             .viewProjectionMatrix = m_camera.getLookAtMatrix() *
                                     math::XMMatrixPerspectiveFovLH(math::XMConvertToRadians(45.0f), (float)m_windowDimensions.x / (float)m_windowDimensions.y, 0.1f, 100.0f),
+            .lightColor = getCurrentFrameResources().sceneBuffer.data.lightColor,
+            .viewSpaceLightPosition = viewSpaceLightPositionFloat3,
         };
+
+        getCurrentFrameResources().sceneBuffer.data.viewMatrix = m_camera.getLookAtMatrix();
 
         getCurrentFrameResources().sceneBuffer.update();
     }
 
     void Engine::render()
     {
+        // Start the Dear ImGui frame
+        ImGui_ImplDX12_NewFrame();
+        ImGui_ImplSDL2_NewFrame();
+        ImGui::NewFrame();
+
+        // Add ImGui render stuff here.
+        ImGui::Begin("Renderables");
+        for (auto& [name, renderable] : m_renderables)
+        {
+            const std::string nameStr = wStringToString(name);
+            if (ImGui::TreeNode(nameStr.c_str()))
+            {
+                ImGui::SliderFloat3("rotate", &renderable.rotate.x, -math::XMConvertToRadians(90.0f), math::XMConvertToRadians(90.0f));
+                ImGui::SliderFloat("scale", &renderable.scale.x, 0.1f, 10.0f);
+                ImGui::SliderFloat3("translate", &renderable.translate.x, -25.0f, 25.0f);
+                ImGui::TreePop();
+
+                // scale is applied uniformly to x, y, and z components.
+                renderable.scale.y = renderable.scale.x;
+                renderable.scale.z = renderable.scale.x;
+            }
+        }
+        ImGui::End();
+
+        ImGui::Begin("Scene data");
+        ImGui::ColorEdit3("light color", &getCurrentFrameResources().sceneBuffer.data.lightColor.x);
+        ImGui::End();
+
+        ImGui::Render();
+
         // Reset the command list and the command allocator to add new commands.
         throwIfFailed(getCurrentFrameResources().commandAllocator->Reset());
         throwIfFailed(getCurrentFrameResources().commandList->Reset(getCurrentFrameResources().commandAllocator.Get(), nullptr));
@@ -161,7 +220,7 @@ namespace nether
 
                 cmd->SetDescriptorHeaps(static_cast<uint32_t>(shaderVisibleDescriptorHeaps.size()), shaderVisibleDescriptorHeaps.data());
 
-                cmd->SetGraphicsRootSignature(lastGraphicsPipeline->rootSignature.Get());
+                cmd->SetGraphicsRootSignature(m_bindlessRootSignature.Get());
                 cmd->SetPipelineState(lastGraphicsPipeline->pipelineState.Get());
             }
 
@@ -173,7 +232,7 @@ namespace nether
                 cmd->IASetIndexBuffer(&lastMesh->indexBuffer.indexBufferView);
             }
 
-            struct VertexShaderRenderResources
+            struct RenderResources
             {
                 uint32_t positionBufferIndex{};
                 uint32_t textureCoordBufferIndex{};
@@ -185,7 +244,7 @@ namespace nether
                 uint32_t albedoTextureIndex{};
             };
 
-            const VertexShaderRenderResources vertexShaderRenderResources = {
+            const RenderResources renderResources = {
                 .positionBufferIndex = lastMesh->positionBuffer.srvIndex,
                 .textureCoordBufferIndex = lastMesh->textureCoordBuffer.srvIndex,
                 .normalBufferIndex = lastMesh->normalBuffer.srvIndex,
@@ -196,9 +255,14 @@ namespace nether
                 .albedoTextureIndex = m_textures[L"AlbedoTexture"].srvIndex,
             };
 
-            cmd->SetGraphicsRoot32BitConstants(0u, 64u, &vertexShaderRenderResources, 0u);
+            cmd->SetGraphicsRoot32BitConstants(0u, 64u, &renderResources, 0u);
 
             cmd->DrawIndexedInstanced(36u, 1u, 0u, 0u, 0u);
+        }
+
+        if (m_showUI)
+        {
+            ImGui_ImplDX12_RenderDrawData(ImGui::GetDrawData(), cmd.Get());
         }
 
         const CD3DX12_RESOURCE_BARRIER renderTargetToPresentationBarrier =
@@ -507,113 +571,63 @@ namespace nether
         m_device->CreateDepthStencilView(m_depthStencilTexture.Get(), &dsvDesc, dsvDescriptorHandle);
     }
 
-    void Engine::initMipMapGenerator()
+    void Engine::initImgui()
     {
+        // Setup Dear ImGui context.
+        IMGUI_CHECKVERSION();
+        ImGui::CreateContext();
+        ImGuiIO& io = ImGui::GetIO();
 
-        // Set up the mip map generation compute pipeline.
-        Shader mipMapGenerationComputeShader = ShaderCompiler::compile(ShaderTypes::Compute, L"shaders/GenerateMipMaps.hlsl");
+        // Setup Dear ImGui style.
+        ImGui::StyleColorsDark();
 
-        const CD3DX12_DESCRIPTOR_RANGE1 shaderResourceViewDescriptorRange{D3D12_DESCRIPTOR_RANGE_TYPE_SRV, 1u, 0u, 2u};
-        const CD3DX12_DESCRIPTOR_RANGE1 unorderedAccessViewDescriptorRange{D3D12_DESCRIPTOR_RANGE_TYPE_UAV, 4u, 0u, 2u};
+        // Setup Platform/Renderer backends.
+        ImGui_ImplSDL2_InitForD3D(m_window);
 
-        const D3D12_STATIC_SAMPLER_DESC bilinearClampStaticSamplerDesc = {
-            .Filter = D3D12_FILTER_MIN_MAG_MIP_LINEAR,
-            .AddressU = D3D12_TEXTURE_ADDRESS_MODE_CLAMP,
-            .AddressV = D3D12_TEXTURE_ADDRESS_MODE_CLAMP,
-            .AddressW = D3D12_TEXTURE_ADDRESS_MODE_CLAMP,
-            .MipLODBias = 0,
-            .MaxAnisotropy = 0,
-            .ComparisonFunc = D3D12_COMPARISON_FUNC_NEVER,
-            .BorderColor = D3D12_STATIC_BORDER_COLOR_TRANSPARENT_BLACK,
-            .MinLOD = 0.0f,
-            .MaxLOD = D3D12_FLOAT32_MAX,
-            .ShaderRegister = 0,
-            .RegisterSpace = 2,
-            .ShaderVisibility = D3D12_SHADER_VISIBILITY_ALL,
-        };
+        ImGui_ImplDX12_Init(m_device.Get(),
+                            FRAME_COUNT,
+                            DXGI_FORMAT_R8G8B8A8_UNORM,
+                            m_cbvSrvUavDescriptorHeap.descriptorHeap.Get(),
+                            m_cbvSrvUavDescriptorHeap.currentCpuDescriptorHandle,
+                            m_cbvSrvUavDescriptorHeap.currentGpuDescriptorHandle);
 
-        CD3DX12_ROOT_PARAMETER1 shaderResourceViewDescriptorTable{};
-        shaderResourceViewDescriptorTable.InitAsDescriptorTable(1u, &shaderResourceViewDescriptorRange);
-
-        CD3DX12_ROOT_PARAMETER1 unorderedAccessViewDescriptorTable{};
-        unorderedAccessViewDescriptorTable.InitAsDescriptorTable(1u, &unorderedAccessViewDescriptorRange);
-
-        CD3DX12_ROOT_PARAMETER1 constantBufferInlineDescriptor{};
-        constantBufferInlineDescriptor.InitAsConstantBufferView(0u, 2u);
-
-        const std::array<CD3DX12_ROOT_PARAMETER1, 3> computeShaderRootParameters = {
-            constantBufferInlineDescriptor,
-            shaderResourceViewDescriptorTable,
-            unorderedAccessViewDescriptorTable,
-        };
-
-        const D3D12_VERSIONED_ROOT_SIGNATURE_DESC computeShaderRootSignaureDesc = {
-            .Version = D3D_ROOT_SIGNATURE_VERSION_1_1,
-            .Desc_1_1 =
-                {
-                    .NumParameters = static_cast<uint32_t>(computeShaderRootParameters.size()),
-                    .pParameters = computeShaderRootParameters.data(),
-                    .NumStaticSamplers = 1u,
-                    .pStaticSamplers = &bilinearClampStaticSamplerDesc,
-                },
-        };
-
-        Comptr<ID3DBlob> rootSignatureBlob{};
-        Comptr<ID3DBlob> errorBlob{};
-
-        throwIfFailed(::D3D12SerializeVersionedRootSignature(&computeShaderRootSignaureDesc, &rootSignatureBlob, &errorBlob));
-        if (errorBlob)
-        {
-            const char* errorMessage = (const char*)errorBlob->GetBufferPointer();
-            fatalError(errorMessage);
-        }
-
-        throwIfFailed(
-            m_device->CreateRootSignature(0u, rootSignatureBlob->GetBufferPointer(), rootSignatureBlob->GetBufferSize(), IID_PPV_ARGS(&m_mipMapGenerationPipeline.rootSignature)));
-        setName(m_mipMapGenerationPipeline.rootSignature.Get(), L" Mip Map Generation Root signature");
-
-        const D3D12_SHADER_BYTECODE computeShaderByteCode = {
-            .pShaderBytecode = mipMapGenerationComputeShader.shaderBlob->GetBufferPointer(),
-            .BytecodeLength = mipMapGenerationComputeShader.shaderBlob->GetBufferSize(),
-        };
-
-        // Setup compute pipeline state.
-
-        const D3D12_COMPUTE_PIPELINE_STATE_DESC computePipelineStateDesc = {
-            .pRootSignature = m_mipMapGenerationPipeline.rootSignature.Get(),
-            .CS = computeShaderByteCode,
-            .NodeMask = 0u,
-        };
-
-        throwIfFailed(m_device->CreateComputePipelineState(&computePipelineStateDesc, IID_PPV_ARGS(&m_mipMapGenerationPipeline.pipelineState)));
-        setName(m_mipMapGenerationPipeline.pipelineState.Get(), L"Mip Map Generation Pipeline State");
+        m_cbvSrvUavDescriptorHeap.offset();
     }
 
     void Engine::initPipelines()
     {
-        // Setup the root signature. RS specifies what is the layout that resources are used in the shaders.
+        // Setup all static samplers (see shaders/StaticSampler.hlsli).
+        const std::array<CD3DX12_STATIC_SAMPLER_DESC, 5> staticSamplers = {
+            // pointClampSampler.
+            CD3DX12_STATIC_SAMPLER_DESC(0u,
+                                        D3D12_FILTER_MIN_MAG_POINT_MIP_LINEAR,
+                                        D3D12_TEXTURE_ADDRESS_MODE_CLAMP,
+                                        D3D12_TEXTURE_ADDRESS_MODE_CLAMP,
+                                        D3D12_TEXTURE_ADDRESS_MODE_CLAMP),
 
-        // Setup shaders.
-        const Shader vertexShader = ShaderCompiler::compile(ShaderTypes::Vertex, L"shaders/TestShader.hlsl");
-        const Shader pixelShader = ShaderCompiler::compile(ShaderTypes::Pixel, L"shaders/TestShader.hlsl");
+            // pointWrapSampler.
+            CD3DX12_STATIC_SAMPLER_DESC(1u,
+                                        D3D12_FILTER_MIN_MAG_POINT_MIP_LINEAR,
+                                        D3D12_TEXTURE_ADDRESS_MODE_WRAP,
+                                        D3D12_TEXTURE_ADDRESS_MODE_WRAP,
+                                        D3D12_TEXTURE_ADDRESS_MODE_WRAP),
 
-        // Setup default (test) static sampler.
-        const D3D12_STATIC_SAMPLER_DESC staticSamplerDesc = {
-            .Filter = D3D12_FILTER_MIN_MAG_MIP_POINT,
-            .AddressU = D3D12_TEXTURE_ADDRESS_MODE_WRAP,
-            .AddressV = D3D12_TEXTURE_ADDRESS_MODE_WRAP,
-            .AddressW = D3D12_TEXTURE_ADDRESS_MODE_WRAP,
-            .MipLODBias = 0,
-            .MaxAnisotropy = 0,
-            .ComparisonFunc = D3D12_COMPARISON_FUNC_NEVER,
-            .BorderColor = D3D12_STATIC_BORDER_COLOR_TRANSPARENT_BLACK,
-            .MinLOD = 0.0f,
-            .MaxLOD = D3D12_FLOAT32_MAX,
-            .ShaderRegister = 0,
-            .RegisterSpace = 1,
-            .ShaderVisibility = D3D12_SHADER_VISIBILITY_PIXEL,
+            // linearClampSampler.
+            CD3DX12_STATIC_SAMPLER_DESC(2u, D3D12_FILTER_MIN_MAG_MIP_LINEAR, D3D12_TEXTURE_ADDRESS_MODE_CLAMP, D3D12_TEXTURE_ADDRESS_MODE_CLAMP, D3D12_TEXTURE_ADDRESS_MODE_CLAMP),
+
+            // linearWrapSampler.
+            CD3DX12_STATIC_SAMPLER_DESC(3u,
+                                        D3D12_FILTER_MIN_MAG_POINT_MIP_LINEAR,
+                                        D3D12_TEXTURE_ADDRESS_MODE_WRAP,
+                                        D3D12_TEXTURE_ADDRESS_MODE_WRAP,
+                                        D3D12_TEXTURE_ADDRESS_MODE_WRAP),
+
+            // anisotropicSampler.
+            CD3DX12_STATIC_SAMPLER_DESC(4u, D3D12_FILTER_ANISOTROPIC, D3D12_TEXTURE_ADDRESS_MODE_WRAP, D3D12_TEXTURE_ADDRESS_MODE_WRAP, D3D12_TEXTURE_ADDRESS_MODE_WRAP),
         };
 
+        // Setup the root signature. RS specifies what is the layout that resources are used in the shaders. As bindless is used, there is only one root signature for all
+        // pipelines.
         const D3D12_ROOT_PARAMETER1 rootParameters = {
             .ParameterType = D3D12_ROOT_PARAMETER_TYPE_32BIT_CONSTANTS,
             .Constants =
@@ -631,8 +645,8 @@ namespace nether
                 {
                     .NumParameters = 1u,
                     .pParameters = &rootParameters,
-                    .NumStaticSamplers = 1u,
-                    .pStaticSamplers = &staticSamplerDesc,
+                    .NumStaticSamplers = static_cast<uint32_t>(staticSamplers.size()),
+                    .pStaticSamplers = staticSamplers.data(),
                     .Flags = D3D12_ROOT_SIGNATURE_FLAG_CBV_SRV_UAV_HEAP_DIRECTLY_INDEXED | D3D12_ROOT_SIGNATURE_FLAG_SAMPLER_HEAP_DIRECTLY_INDEXED,
                 },
         };
@@ -648,53 +662,11 @@ namespace nether
             fatalError(errorMessage);
         }
 
-        throwIfFailed(m_device->CreateRootSignature(0u,
-                                                    rootSignatureBlob->GetBufferPointer(),
-                                                    rootSignatureBlob->GetBufferSize(),
-                                                    IID_PPV_ARGS(&m_graphicsPipelines[L"BasePipeline"].rootSignature)));
-        setName(m_graphicsPipelines[L"BasePipeline"].rootSignature.Get(), L"Root signature");
+        throwIfFailed(m_device->CreateRootSignature(0u, rootSignatureBlob->GetBufferPointer(), rootSignatureBlob->GetBufferSize(), IID_PPV_ARGS(&m_bindlessRootSignature)));
+        setName(m_bindlessRootSignature.Get(), L"Bindless Root signature");
 
-        const D3D12_SHADER_BYTECODE vertexShaderByteCode = {
-            .pShaderBytecode = vertexShader.shaderBlob->GetBufferPointer(),
-            .BytecodeLength = vertexShader.shaderBlob->GetBufferSize(),
-        };
-
-        const D3D12_SHADER_BYTECODE pixelShaderByteCode = {
-            .pShaderBytecode = pixelShader.shaderBlob->GetBufferPointer(),
-            .BytecodeLength = pixelShader.shaderBlob->GetBufferSize(),
-        };
-
-        // Setup graphics pipeline state.
-        CD3DX12_RASTERIZER_DESC defaultRasterizerDesc(D3D12_DEFAULT);
-        defaultRasterizerDesc.FrontCounterClockwise = false;
-
-        // Setup depth stencil state.
-        const D3D12_DEPTH_STENCIL_DESC depthStencilDesc = {
-            .DepthEnable = true,
-            .DepthWriteMask = D3D12_DEPTH_WRITE_MASK_ALL,
-            .DepthFunc = D3D12_COMPARISON_FUNC_LESS_EQUAL,
-            .StencilEnable = false,
-        };
-
-        const D3D12_GRAPHICS_PIPELINE_STATE_DESC graphicsPipelineStateDesc = {
-            .pRootSignature = m_graphicsPipelines[L"BasePipeline"].rootSignature.Get(),
-            .VS = vertexShaderByteCode,
-            .PS = pixelShaderByteCode,
-            .BlendState = CD3DX12_BLEND_DESC(D3D12_DEFAULT),
-            .SampleMask = UINT_MAX,
-            .RasterizerState = defaultRasterizerDesc,
-            .DepthStencilState = depthStencilDesc,
-            .PrimitiveTopologyType = D3D12_PRIMITIVE_TOPOLOGY_TYPE_TRIANGLE,
-            .NumRenderTargets = 1u,
-            .RTVFormats = DXGI_FORMAT_R8G8B8A8_UNORM,
-            .DSVFormat = DXGI_FORMAT_D32_FLOAT,
-            .SampleDesc = {1u, 0u},
-            .NodeMask = 0u,
-            .Flags = D3D12_PIPELINE_STATE_FLAG_NONE,
-        };
-
-        throwIfFailed(m_device->CreateGraphicsPipelineState(&graphicsPipelineStateDesc, IID_PPV_ARGS(&m_graphicsPipelines[L"BasePipeline"].pipelineState)));
-        setName(m_graphicsPipelines[L"BasePipeline"].pipelineState.Get(), L"Pipeline State");
+        createPipeline(L"shaders/PhongShader.hlsl", L"shaders/PhongShader.hlsl", L"BasePipeline");
+        createPipeline(L"shaders/LightShader.hlsl", L"shaders/LightShader.hlsl", L"LightPipeline");
     }
 
     void Engine::initMeshes() { m_meshes[L"CubeMesh"] = createMesh("assets/Cube/glTF/Cube.gltf"); }
@@ -712,6 +684,12 @@ namespace nether
         m_renderables[L"Cube"].mesh = &m_meshes[L"CubeMesh"];
         m_renderables[L"Cube"].graphicsPipeline = &m_graphicsPipelines[L"BasePipeline"];
         m_renderables[L"Cube"].transformBuffer = createConstantBuffer<TransformData>(L"Cube Transform buffer");
+
+        m_renderables[L"Light"].mesh = &m_meshes[L"CubeMesh"];
+        m_renderables[L"Light"].graphicsPipeline = &m_graphicsPipelines[L"LightPipeline"];
+        m_renderables[L"Light"].transformBuffer = createConstantBuffer<TransformData>(L"Cube Transform buffer");
+        m_renderables[L"Light"].translate = math::XMFLOAT3{2.0f, 2.0f, 0.0f};
+        m_renderables[L"Light"].scale = math::XMFLOAT3{0.3f, 0.3f, 0.3f};
     }
 
     void Engine::executeCopyCommands()
@@ -911,7 +889,7 @@ namespace nether
         const D3D12_RESOURCE_DESC structuredBufferResourceDesc = {
             .Dimension = D3D12_RESOURCE_DIMENSION_BUFFER,
             .Alignment = 0u,
-            .Width = numberOfComponents *  stride,
+            .Width = numberOfComponents * stride,
             .Height = 1u,
             .DepthOrArraySize = 1u,
             .MipLevels = 1u,
@@ -931,6 +909,7 @@ namespace nether
             .Buffer =
                 {
                     .FirstElement = 0u,
+
                     .NumElements = numberOfComponents,
                     .StructureByteStride = stride,
                 },
@@ -972,7 +951,7 @@ namespace nether
 
         // Build meshes.
         const tinygltf::Scene& scene = model.scenes[model.defaultScene];
-         
+
         tinygltf::Node& node = model.nodes[0u];
         node.mesh = std::max<int32_t>(0u, node.mesh);
 
@@ -1068,16 +1047,68 @@ namespace nether
         Mesh mesh{};
         mesh.indexBuffer = createIndexBuffer(reinterpret_cast<const std::byte*>(indices.data()), indexBufferSize, stringToWString(modelPath) + std::wstring(L" Index buffer"));
 
-        mesh.positionBuffer =
-            createStructuredBuffer(reinterpret_cast<const std::byte*>(positionData.data()), static_cast<uint32_t>(positionData.size()), sizeof(math::XMFLOAT3), stringToWString(modelPath) + std::wstring(L" Position buffer"));
-      
+        mesh.positionBuffer = createStructuredBuffer(reinterpret_cast<const std::byte*>(positionData.data()),
+                                                     static_cast<uint32_t>(positionData.size()),
+                                                     sizeof(math::XMFLOAT3),
+                                                     stringToWString(modelPath) + std::wstring(L" Position buffer"));
+
         mesh.textureCoordBuffer = createStructuredBuffer(reinterpret_cast<const std::byte*>(textureCoordData.data()),
                                                          static_cast<uint32_t>(textureCoordData.size()),
                                                          sizeof(math::XMFLOAT2),
                                                          stringToWString(modelPath) + std::wstring(L" Texture Coord buffer"));
-        mesh.normalBuffer =
-            createStructuredBuffer(reinterpret_cast<const std::byte*>(normalData.data()), static_cast<uint32_t>(normalData.size()), sizeof(math::XMFLOAT3), stringToWString(modelPath) + std::wstring(L" Normal buffer"));
+        mesh.normalBuffer = createStructuredBuffer(reinterpret_cast<const std::byte*>(normalData.data()),
+                                                   static_cast<uint32_t>(normalData.size()),
+                                                   sizeof(math::XMFLOAT3),
+                                                   stringToWString(modelPath) + std::wstring(L" Normal buffer"));
 
         return mesh;
+    }
+    void Engine::createPipeline(const std::wstring vertexShaderPath, const std::wstring pixelShaderPath, const std::wstring pipelineName)
+    {
+        // Setup shaders.
+        const Shader vertexShader = ShaderCompiler::compile(ShaderTypes::Vertex, vertexShaderPath);
+        const Shader pixelShader = ShaderCompiler::compile(ShaderTypes::Pixel, pixelShaderPath);
+
+        const D3D12_SHADER_BYTECODE vertexShaderByteCode = {
+            .pShaderBytecode = vertexShader.shaderBlob->GetBufferPointer(),
+            .BytecodeLength = vertexShader.shaderBlob->GetBufferSize(),
+        };
+
+        const D3D12_SHADER_BYTECODE pixelShaderByteCode = {
+            .pShaderBytecode = pixelShader.shaderBlob->GetBufferPointer(),
+            .BytecodeLength = pixelShader.shaderBlob->GetBufferSize(),
+        };
+
+        // Setup graphics pipeline state.
+        CD3DX12_RASTERIZER_DESC defaultRasterizerDesc(D3D12_DEFAULT);
+        defaultRasterizerDesc.FrontCounterClockwise = false;
+
+        // Setup depth stencil state.
+        const D3D12_DEPTH_STENCIL_DESC depthStencilDesc = {
+            .DepthEnable = true,
+            .DepthWriteMask = D3D12_DEPTH_WRITE_MASK_ALL,
+            .DepthFunc = D3D12_COMPARISON_FUNC_LESS_EQUAL,
+            .StencilEnable = false,
+        };
+
+        const D3D12_GRAPHICS_PIPELINE_STATE_DESC graphicsPipelineStateDesc = {
+            .pRootSignature = m_bindlessRootSignature.Get(),
+            .VS = vertexShaderByteCode,
+            .PS = pixelShaderByteCode,
+            .BlendState = CD3DX12_BLEND_DESC(D3D12_DEFAULT),
+            .SampleMask = UINT_MAX,
+            .RasterizerState = defaultRasterizerDesc,
+            .DepthStencilState = depthStencilDesc,
+            .PrimitiveTopologyType = D3D12_PRIMITIVE_TOPOLOGY_TYPE_TRIANGLE,
+            .NumRenderTargets = 1u,
+            .RTVFormats = DXGI_FORMAT_R8G8B8A8_UNORM,
+            .DSVFormat = DXGI_FORMAT_D32_FLOAT,
+            .SampleDesc = {1u, 0u},
+            .NodeMask = 0u,
+            .Flags = D3D12_PIPELINE_STATE_FLAG_NONE,
+        };
+
+        throwIfFailed(m_device->CreateGraphicsPipelineState(&graphicsPipelineStateDesc, IID_PPV_ARGS(&m_graphicsPipelines[pipelineName.data()].pipelineState)));
+        setName(m_graphicsPipelines[L"BasePipeline"].pipelineState.Get(), pipelineName.data() + std::wstring(L"Pipeline State"));
     }
 }

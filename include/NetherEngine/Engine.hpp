@@ -30,16 +30,17 @@ namespace nether
         void initSyncPrimitives();
         void initSwapchain();
 
-        void initMipMapGenerator();
+        void initImgui();
 
         void initPipelines();
+
         void initMeshes();
         void initTextures();
         void initScene();
 
         void executeCopyCommands();
 
-    private:
+      private:
         // If data is nullptr, a buffer with CPU / GPU access will be created. Else, a GPU only buffer will be created.
         [[nodiscard]] Comptr<ID3D12Resource> createBuffer(const D3D12_RESOURCE_DESC& bufferResourceDesc, const std::byte* data, const std::wstring_view bufferName);
 
@@ -50,10 +51,10 @@ namespace nether
         [[nodiscard]] StructuredBuffer createStructuredBuffer(const std::byte* data, const uint32_t numberOfComponents, const uint32_t stride, const std::wstring_view bufferName);
         template <typename T> [[nodiscard]] ConstantBuffer<T> createConstantBuffer(const std::wstring_view constantBufferName);
 
-
-
         [[nodiscard]] Mesh createMesh(const std::string_view meshPath);
 
+        // Add the newly created pipeline to the unordered map.
+        void createPipeline(const std::wstring vertexShaderPath, const std::wstring pixelShaderPath, const std::wstring pipelineName);
 
       public:
         static constexpr uint32_t FRAME_COUNT = 2u;
@@ -87,7 +88,7 @@ namespace nether
         Comptr<ID3D12Fence1> m_fence{};
         HANDLE m_fenceEvent{};
 
-        DescriptorHeap m_rtvDescriptorHeap {};
+        DescriptorHeap m_rtvDescriptorHeap{};
         DescriptorHeap m_dsvDescriptorHeap{};
         DescriptorHeap m_cbvSrvUavDescriptorHeap{};
 
@@ -95,6 +96,8 @@ namespace nether
         Comptr<IDXGISwapChain3> m_swapchain{};
 
         Comptr<ID3D12Resource> m_depthStencilTexture{};
+
+        Comptr<ID3D12RootSignature> m_bindlessRootSignature{};
 
         std::unordered_map<std::wstring, GraphicsPipeline> m_graphicsPipelines{};
         ComputePipeline m_mipMapGenerationPipeline{};
@@ -105,6 +108,8 @@ namespace nether
         std::unordered_map<std::wstring, Renderable> m_renderables{};
 
         Camera m_camera{};
+
+        bool m_showUI{true};
     };
 
     template <typename T> inline ConstantBuffer<T> Engine::createConstantBuffer(const std::wstring_view constantBufferName)

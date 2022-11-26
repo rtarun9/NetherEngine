@@ -8,6 +8,13 @@
     "directx-dxc",
     "tinygltf",
     "d3dx12",
-    "stb"
+    "stb",
+    {
+      "name": "imgui",
+      "features": [
+        "dx12-binding",
+        "sdl2-binding"
+      ]
+    }
   ]
 }

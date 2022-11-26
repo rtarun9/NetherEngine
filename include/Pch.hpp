@@ -19,6 +19,7 @@ static constexpr bool NETHER_DEBUG_MODE = false;
 #include <fstream>
 #include <ranges>
 #include <vector>
+#include <filesystem>
 #include <array>
 #include <unordered_map>
 #include <chrono>

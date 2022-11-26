@@ -10,7 +10,7 @@ namespace nether::ShaderCompiler
     // Used to create include handle and provides interfaces for loading shader to blob, etc.
     Comptr<IDxcUtils> utils{};
     Comptr<IDxcIncludeHandler> includeHandler{};
-
+    std::wstring shaderDirectory{};
 
     Shader compile(const ShaderTypes& shaderType, const std::wstring_view shaderPath)
     {
@@ -21,6 +21,33 @@ namespace nether::ShaderCompiler
             throwIfFailed(::DxcCreateInstance(CLSID_DxcUtils, IID_PPV_ARGS(&utils)));
             throwIfFailed(::DxcCreateInstance(CLSID_DxcCompiler, IID_PPV_ARGS(&compiler)));
             throwIfFailed(utils->CreateDefaultIncludeHandler(&includeHandler));
+
+            // Find the base shader directory.
+            // Find the shader's base directory.
+            std::filesystem::path currentDirectory = std::filesystem::current_path();
+
+            while (!std::filesystem::exists(currentDirectory / "shaders"))
+            {
+                if (currentDirectory.has_parent_path())
+                {
+                    currentDirectory = currentDirectory.parent_path();
+                }
+                else
+                {
+                    fatalError(L"Shaders Directory not found!");
+                }
+            }
+
+            const std::filesystem::path shadersDirectory = currentDirectory / "shaders/";
+
+            if (!std::filesystem::is_directory(shadersDirectory))
+            {
+                fatalError(L"Shaders Directory that was located is not a directory!");
+            }
+
+            shaderDirectory = currentDirectory.wstring() + L"/shaders/";
+
+            debugLog(L"Shader base directory : " + shaderDirectory);
         }
 
         // Setup compilation arguments.
@@ -92,6 +119,8 @@ namespace nether::ShaderCompiler
             DXC_ARG_PACK_MATRIX_ROW_MAJOR,
             DXC_ARG_WARNINGS_ARE_ERRORS,
             DXC_ARG_ALL_RESOURCES_BOUND,
+            L"-I",
+            shaderDirectory.c_str(),
         };
 
         // Indicate that the shader should be in a debuggable state if in debug mode.
@@ -109,7 +138,7 @@ namespace nether::ShaderCompiler
         Comptr<IDxcBlobEncoding> sourceBlob{};
         throwIfFailed(utils->LoadFile(shaderPath.data(), nullptr, &sourceBlob));
 
-        DxcBuffer sourceBuffer{
+        const DxcBuffer sourceBuffer{
             .Ptr = sourceBlob->GetBufferPointer(),
             .Size = sourceBlob->GetBufferSize(),
             .Encoding = 0u,
