@@ -1,25 +1,10 @@
+#include "Common.hlsli"
 #include "StaticSamplers.hlsli"
 
 struct VertexOutput
 {
     float4 position : SV_Position;
     float2 textureCoord : TEXTURE_COORD;
-};
-
-struct TransformData
-{
-    row_major matrix modelMatrix;
-    row_major matrix inverseModelViewMatrix;
-};
-
-struct SceneData
-{
-    row_major matrix viewMatrix;
-    row_major matrix viewProjectionMatrix;
-    float3 lightColor;
-    float padding;
-    float3 lightPosition;
-    float padding2;
 };
 
 struct RenderResources
@@ -54,8 +39,6 @@ VertexOutput VsMain(uint vertexID : SV_VertexID)
 float4 PsMain(VertexOutput input) : SV_Target
 {
     ConstantBuffer<SceneData> sceneBuffer = ResourceDescriptorHeap[renderResources.sceneBufferIndex];
-
-
 
     return float4(sceneBuffer.lightColor, 1.0f);
 }

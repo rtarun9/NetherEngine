@@ -32,19 +32,23 @@ namespace nether
 
         void initImgui();
 
+
         void initPipelines();
+
+        void initMipMapGenerator();
 
         void initMeshes();
         void initTextures();
         void initScene();
 
         void executeCopyCommands();
+        void executeComputeCommands();
 
       private:
         // If data is nullptr, a buffer with CPU / GPU access will be created. Else, a GPU only buffer will be created.
         [[nodiscard]] Comptr<ID3D12Resource> createBuffer(const D3D12_RESOURCE_DESC& bufferResourceDesc, const std::byte* data, const std::wstring_view bufferName);
 
-        [[nodiscard]] Texture createTexture(const std::string_view texturePath, const DXGI_FORMAT& format, const std::wstring_view textureName);
+        [[nodiscard]] Texture createTexture(const std::string_view texturePath, const DXGI_FORMAT& format, const bool generateMipMaps, const std::wstring_view textureName);
 
         // Helper functions for creating specific types of buffers (structured byffer, index, constant etc). Might be removed eventually, or made into templated functions.
         [[nodiscard]] IndexBuffer createIndexBuffer(const std::byte* data, const uint32_t bufferSize, const std::wstring_view indexBufferName);
@@ -55,6 +59,8 @@ namespace nether
 
         // Add the newly created pipeline to the unordered map.
         void createPipeline(const std::wstring vertexShaderPath, const std::wstring pixelShaderPath, const std::wstring pipelineName);
+
+        void generateMips(Texture& texture);
 
       public:
         static constexpr uint32_t FRAME_COUNT = 2u;
@@ -80,7 +86,15 @@ namespace nether
 
         Comptr<ID3D12CommandAllocator> m_copyCommandAllocator{};
         Comptr<ID3D12GraphicsCommandList2> m_copyCommandList{};
+
+        Comptr<ID3D12CommandQueue> m_computeCommandQueue{};
+        Comptr<ID3D12Fence> m_computeFence{};
+
+        Comptr<ID3D12CommandAllocator> m_computeCommandAllocator{};
+        Comptr<ID3D12GraphicsCommandList2> m_computeCommandList{};
+
         uint64_t m_copyFenceValue{};
+        uint64_t m_computeFenceValue{};
 
         uint32_t m_frameIndex{};
         uint32_t m_frameCount{};
@@ -100,7 +114,6 @@ namespace nether
         Comptr<ID3D12RootSignature> m_bindlessRootSignature{};
 
         std::unordered_map<std::wstring, GraphicsPipeline> m_graphicsPipelines{};
-        ComputePipeline m_mipMapGenerationPipeline{};
 
         std::unordered_map<std::wstring, Mesh> m_meshes{};
         std::unordered_map<std::wstring, Texture> m_textures{};
@@ -110,6 +123,12 @@ namespace nether
         Camera m_camera{};
 
         bool m_showUI{true};
+
+        math::XMFLOAT3 m_directionalLightColor{1.0f, 1.0f, 1.0f};
+        math::XMFLOAT3 m_directionalLightPosition{};
+
+        ConstantBuffer<GenerateMipMapData> m_mipGenBuffer{};
+        ComputePipeline m_mipMapGenerationPipeline{};
     };
 
     template <typename T> inline ConstantBuffer<T> Engine::createConstantBuffer(const std::wstring_view constantBufferName)
@@ -137,7 +156,7 @@ namespace nether
 
         m_device->CreateConstantBufferView(&constantBufferConstantBufferViewDesc, m_cbvSrvUavDescriptorHeap.currentCpuDescriptorHandle);
 
-        constantBuffer.srvIndex = m_cbvSrvUavDescriptorHeap.currentDescriptorIndex;
+        constantBuffer.cbvIndex = m_cbvSrvUavDescriptorHeap.currentDescriptorIndex;
 
         m_cbvSrvUavDescriptorHeap.offset();
 

@@ -23,8 +23,7 @@ struct DescriptorHeap
 
     void init(ID3D12Device5* const device, const D3D12_DESCRIPTOR_HEAP_TYPE heapType, uint32_t descriptorCount, const std::wstring_view descriptorName)
     {
-        const D3D12_DESCRIPTOR_HEAP_FLAGS descriptorHeapFlag =
-            [=]()
+        const D3D12_DESCRIPTOR_HEAP_FLAGS descriptorHeapFlag = [=]()
         {
             if ((heapType == D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV) || (heapType == D3D12_DESCRIPTOR_HEAP_TYPE_SAMPLER))
             {
@@ -37,7 +36,8 @@ struct DescriptorHeap
         const D3D12_DESCRIPTOR_HEAP_DESC descriptorHeapDesc = {
             .Type = heapType,
             .NumDescriptors = descriptorCount,
-            .Flags = ((heapType == D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV) || (heapType == D3D12_DESCRIPTOR_HEAP_TYPE_SAMPLER)) ? D3D12_DESCRIPTOR_HEAP_FLAG_SHADER_VISIBLE                                                                 : D3D12_DESCRIPTOR_HEAP_FLAG_NONE,
+            .Flags = ((heapType == D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV) || (heapType == D3D12_DESCRIPTOR_HEAP_TYPE_SAMPLER)) ? D3D12_DESCRIPTOR_HEAP_FLAG_SHADER_VISIBLE
+                                                                                                                                : D3D12_DESCRIPTOR_HEAP_FLAG_NONE,
             .NodeMask = 0u,
         };
 
@@ -121,7 +121,7 @@ template <typename T> struct ConstantBuffer
     Comptr<ID3D12Resource> buffer{};
     T data{};
     uint8_t* bufferPointer{};
-    uint32_t srvIndex{};
+    uint32_t cbvIndex{};
 
     void update()
     {
@@ -161,10 +161,17 @@ struct alignas(256) SceneData
 {
     math::XMMATRIX viewMatrix{};
     math::XMMATRIX viewProjectionMatrix{};
+    
     math::XMFLOAT3 lightColor{1.0f, 1.0f, 1.0f};
     float padding{};
     math::XMFLOAT3 viewSpaceLightPosition{};
     float padding2{};
+    
+    math::XMFLOAT3 directionalLightColor{1.0f, 1.0f, 1.0f};
+    float padding3{};
+
+    math::XMFLOAT3 viewSpaceDirectionalLightPosition{};
+    float padding4{};
 };
 
 struct FrameResources
@@ -175,4 +182,21 @@ struct FrameResources
     uint64_t fenceValue{};
 
     ConstantBuffer<SceneData> sceneBuffer{};
+};
+
+enum class DimensionType : uint8_t
+{
+    WidthHeightEven,    // A single bilinear sample such that 4 source texture pixels are averaged is required.
+    WidthHeightOdd,     // 4 bilinear samples are to be taken at different offsets ((0.25, 0.25), (0.5, 0.25), (0.25, 0.5), (0.5, 0.5))
+    WidthEvenHeightOdd, // Take 2 bilinear samples at offsets (0.5, 0.25), (0.5, 0.75)
+    WidthOddHeightEven  // Take 2 bilinear samples at offsets (0.25, 0.5), (0.75, 0.5)
+};
+
+struct alignas(256) GenerateMipMapData
+{
+    uint32_t sourceMipLevel;
+    uint32_t numberOfMipLevels;
+    DimensionType dimensionType;
+    uint32_t isSrgb;
+    math::XMFLOAT2 texelSize;
 };

@@ -1,4 +1,7 @@
-// The dimention type will determine how many samples of source texture are required to correctly
+#include "Common.hlsli"
+#include "StaticSamplers.hlsli"
+
+// The dimension type will determine how many samples of source texture are required to correctly
 // sample the texture (i.e if width or height is odd, to prevent undersampling, multiple textures have to be taken).
 enum class DimensionType : uint
 {
@@ -13,20 +16,22 @@ struct GenerateMipMapData
     uint sourceMipLevel;
     uint numberOfMipLevels;
     DimensionType dimensionType;
-    uint isSrgb;
+    uint isSRGB;
     float2 texelSize;
 };
 
-ConstantBuffer<GenerateMipMapData> mipGenBuffer : register(b0, space2);
+struct RenderResources
+{
+    uint mipGenBufferIndex;
+    uint sourceTextureIndex;
+    uint outputMip1Index;
+    uint outputMip2Index;
+    uint outputMip3Index;
+    uint outputMip4Index;
+};
 
-Texture2D<float4> sourceTexture : register(t0, space2);
+ConstantBuffer<RenderResources> renderResources : register(b0);
 
-RWTexture2D<float4> outputMip1 : register(u0, space2);
-RWTexture2D<float4> outputMip2 : register(u1, space2);
-RWTexture2D<float4> outputMip3 : register(u2, space2);
-RWTexture2D<float4> outputMip4 : register(u3, space2);
-
-SamplerState bilinearSampler : register(s0, space2);
 
 // The color channels are group shared (i.e all threads within a thread group can access them).
 // They are separated to reduce bank conflicts on LDS (local data store).
@@ -53,9 +58,9 @@ float3 srgbToLinear(float3 srgbColor) { return srgbColor < 0.04045f ? srgbColor 
 float3 linearToSrgb(float3 linearColor) { return linearColor < 0.0031308 ? 12.92 * linearColor : 1.055 * pow(abs(linearColor), 1.0 / 2.4) - 0.055; }
 
 // Before storing color in output texture, convert it to the correct format.
-float4 packColor(float4 color)
+float4 packColor(float4 color, uint isSRGB)
 {
-    if (mipGenBuffer.isSrgb)
+    if (isSRGB)
     {
         return float4(linearToSrgb(color.xyz), color.a);
     }
@@ -69,6 +74,11 @@ float4 packColor(float4 color)
                                   : SV_DispatchThreadID, uint groupIndex
                                   : SV_GroupIndex)
 {
+    ConstantBuffer<GenerateMipMapData> mipGenBuffer = ResourceDescriptorHeap[renderResources.mipGenBufferIndex];
+    
+    Texture2D<float4> sourceTexture = ResourceDescriptorHeap[renderResources.sourceTextureIndex];
+    RWTexture2D<float4> outputMip1 = ResourceDescriptorHeap[renderResources.outputMip1Index];
+
     float4 sourceColor = float4(0.0f, 0.0f, 0.0f, 0.0f);
 
     switch (mipGenBuffer.dimensionType)
@@ -76,7 +86,7 @@ float4 packColor(float4 color)
         case DimensionType::WidthHeightEven:
             {
                 float2 uv = mipGenBuffer.texelSize * (dispatchThreadID.xy + 0.5f);
-                sourceColor = sourceTexture.SampleLevel(bilinearSampler, uv, mipGenBuffer.sourceMipLevel);
+                sourceColor = sourceTexture.SampleLevel(linearClampSampler, uv, mipGenBuffer.sourceMipLevel);
             }
             break;
 
@@ -85,10 +95,10 @@ float4 packColor(float4 color)
                 float2 offset = mipGenBuffer.texelSize * 0.5f;
                 float2 uv = mipGenBuffer.texelSize * (dispatchThreadID.xy + 0.25f);
 
-                sourceColor += sourceTexture.SampleLevel(bilinearSampler, uv, mipGenBuffer.sourceMipLevel);
-                sourceColor += sourceTexture.SampleLevel(bilinearSampler, uv + float2(offset.x, 0.0f), mipGenBuffer.sourceMipLevel);
-                sourceColor += sourceTexture.SampleLevel(bilinearSampler, uv + float2(0.0f, offset.y), mipGenBuffer.sourceMipLevel);
-                sourceColor += sourceTexture.SampleLevel(bilinearSampler, uv + offset, mipGenBuffer.sourceMipLevel);
+                sourceColor += sourceTexture.SampleLevel(linearClampSampler, uv, mipGenBuffer.sourceMipLevel);
+                sourceColor += sourceTexture.SampleLevel(linearClampSampler, uv + float2(offset.x, 0.0f), mipGenBuffer.sourceMipLevel);
+                sourceColor += sourceTexture.SampleLevel(linearClampSampler, uv + float2(0.0f, offset.y), mipGenBuffer.sourceMipLevel);
+                sourceColor += sourceTexture.SampleLevel(linearClampSampler, uv + offset, mipGenBuffer.sourceMipLevel);
                 sourceColor *= 0.25f;
             }
             break;
@@ -98,8 +108,8 @@ float4 packColor(float4 color)
                 float2 offset = mipGenBuffer.texelSize * float2(0.0f, 0.5f);
                 float2 uv = mipGenBuffer.texelSize * (dispatchThreadID.xy + float2(0.5f, 0.25f));
 
-                sourceColor += sourceTexture.SampleLevel(bilinearSampler, uv, mipGenBuffer.sourceMipLevel);
-                sourceColor += sourceTexture.SampleLevel(bilinearSampler, uv + offset, mipGenBuffer.sourceMipLevel);
+                sourceColor += sourceTexture.SampleLevel(linearClampSampler, uv, mipGenBuffer.sourceMipLevel);
+                sourceColor += sourceTexture.SampleLevel(linearClampSampler, uv + offset, mipGenBuffer.sourceMipLevel);
                 sourceColor *= 0.5f;
             }
             break;
@@ -109,25 +119,29 @@ float4 packColor(float4 color)
                 float2 offset = mipGenBuffer.texelSize * float2(0.5f, 0.0f);
                 float2 uv = mipGenBuffer.texelSize * (dispatchThreadID.xy + float2(0.25f, 0.5f));
 
-                sourceColor += sourceTexture.SampleLevel(bilinearSampler, uv, mipGenBuffer.sourceMipLevel);
-                sourceColor += sourceTexture.SampleLevel(bilinearSampler, uv + offset, mipGenBuffer.sourceMipLevel);
+                sourceColor += sourceTexture.SampleLevel(linearClampSampler, uv, mipGenBuffer.sourceMipLevel);
+                sourceColor += sourceTexture.SampleLevel(linearClampSampler, uv + offset, mipGenBuffer.sourceMipLevel);
                 sourceColor *= 0.5f;
             }
     }
 
+
     // All threads from the thread group will participate in generation of first mip level (note that number of dispatch groups is half of that of source texture).
-    outputMip1[dispatchThreadID.xy] = packColor(sourceColor);
+    outputMip1[dispatchThreadID.xy] = packColor(sourceColor, mipGenBuffer.isSRGB);
 
     if (mipGenBuffer.numberOfMipLevels == 1)
     {
         return;
     }
 
+
     storeColor(groupIndex, sourceColor);
 
     // Ensures that all LDS (Local data store) writes have occured across all threads in a thread group.
     GroupMemoryBarrierWithGroupSync();
 
+    RWTexture2D<float4> outputMip2 = ResourceDescriptorHeap[renderResources.outputMip2Index];
+    
     // The 2nd mip level (relative to the first mip level, that is) requires  only
     // 1/4 of the threads that participated in generation of 1st mip level.
     // In group index, the lwo three bits represent X and higher 3 bits represent Y. For example, the group size is 8x8. The grid will have
@@ -145,7 +159,7 @@ float4 packColor(float4 color)
 
         sourceColor *= 0.25f;
 
-        outputMip2[dispatchThreadID.xy / 2] = packColor(sourceColor);
+        outputMip2[dispatchThreadID.xy / 2] = packColor(sourceColor, mipGenBuffer.isSRGB);
     }
 
     storeColor(groupIndex, sourceColor);
@@ -156,6 +170,8 @@ float4 packColor(float4 color)
     }
 
     GroupMemoryBarrierWithGroupSync();
+
+    RWTexture2D<float4> outputMip3 = ResourceDescriptorHeap[renderResources.outputMip3Index];
 
     // Only those threads within the thread group whose X and Y values of group index are multiples of 4 are required to participate.
     // This is because for the 3rd mip level, only 1/16th of the threads are requierd to participate.
@@ -168,7 +184,7 @@ float4 packColor(float4 color)
 
         sourceColor *= 0.25;
 
-        outputMip3[dispatchThreadID.xy / 4] = packColor(sourceColor);
+        outputMip3[dispatchThreadID.xy / 4] = packColor(sourceColor, mipGenBuffer.isSRGB);
     }
 
     storeColor(groupIndex, sourceColor);
@@ -180,7 +196,9 @@ float4 packColor(float4 color)
 
     GroupMemoryBarrierWithGroupSync();
 
-    // Only those threads whose X and Y part of index are multiples of 8 are required to participate for generation of 4th mip map.
+   RWTexture2D<float4> outputMip4 = ResourceDescriptorHeap[renderResources.outputMip2Index];
+
+   // Only those threads whose X and Y part of index are multiples of 8 are required to participate for generation of 4th mip map.
     // As thread group size is 8x8, only a single thread will satisfy said condition, the thread with group index 000_000.
     if (groupIndex == 0)
     {
@@ -190,7 +208,7 @@ float4 packColor(float4 color)
 
         sourceColor *= 0.25f;
 
-        outputMip4[dispatchThreadID.xy / 8] = packColor(sourceColor);
+        outputMip4[dispatchThreadID.xy / 8] = packColor(sourceColor, mipGenBuffer.isSRGB);
     }
 
     return;

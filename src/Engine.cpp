@@ -55,6 +55,9 @@ namespace nether
         // Initialize and create all the pipelines and root signatures.
         initPipelines();
 
+        // Initialize mip map generator.
+        initMipMapGenerator();
+
         // Initialize all the textures.
         initTextures();
 
@@ -135,12 +138,20 @@ namespace nether
         math::XMFLOAT3 viewSpaceLightPositionFloat3{};
         math::XMStoreFloat3(&viewSpaceLightPositionFloat3, viewSpaceLightPosition);
 
+        const math::XMVECTOR directionalLightPosition = math::XMLoadFloat3(&m_directionalLightPosition);
+        const math::XMVECTOR directionalViewSpaceLightPosition = math::XMVector3TransformCoord(directionalLightPosition, m_camera.getLookAtMatrix());
+        math::XMFLOAT3 directionalViewSpaceLightPositionFloat3{};
+        math::XMStoreFloat3(&directionalViewSpaceLightPositionFloat3, directionalViewSpaceLightPosition);
+
         getCurrentFrameResources().sceneBuffer.data = {
             .viewMatrix = m_camera.getLookAtMatrix(),
             .viewProjectionMatrix = m_camera.getLookAtMatrix() *
                                     math::XMMatrixPerspectiveFovLH(math::XMConvertToRadians(45.0f), (float)m_windowDimensions.x / (float)m_windowDimensions.y, 0.1f, 100.0f),
             .lightColor = getCurrentFrameResources().sceneBuffer.data.lightColor,
             .viewSpaceLightPosition = viewSpaceLightPositionFloat3,
+
+            .directionalLightColor = m_directionalLightColor,
+            .viewSpaceDirectionalLightPosition = directionalViewSpaceLightPositionFloat3,
         };
 
         getCurrentFrameResources().sceneBuffer.data.viewMatrix = m_camera.getLookAtMatrix();
@@ -176,6 +187,9 @@ namespace nether
 
         ImGui::Begin("Scene data");
         ImGui::ColorEdit3("light color", &getCurrentFrameResources().sceneBuffer.data.lightColor.x);
+        ImGui::ColorEdit3("directional light color", &m_directionalLightColor.x);
+        ImGui::SliderFloat3("directional light position", &m_directionalLightPosition.x, -25.0f, 25.0f);
+
         ImGui::End();
 
         ImGui::Render();
@@ -249,8 +263,8 @@ namespace nether
                 .textureCoordBufferIndex = lastMesh->textureCoordBuffer.srvIndex,
                 .normalBufferIndex = lastMesh->normalBuffer.srvIndex,
 
-                .sceneBufferIndex = getCurrentFrameResources().sceneBuffer.srvIndex,
-                .transformBufferIndex = renderable.transformBuffer.srvIndex,
+                .sceneBufferIndex = getCurrentFrameResources().sceneBuffer.cbvIndex,
+                .transformBufferIndex = renderable.transformBuffer.cbvIndex,
 
                 .albedoTextureIndex = m_textures[L"AlbedoTexture"].srvIndex,
             };
@@ -464,6 +478,25 @@ namespace nether
         throwIfFailed(m_device->CreateCommandList(0u, D3D12_COMMAND_LIST_TYPE_COPY, m_copyCommandAllocator.Get(), nullptr, IID_PPV_ARGS(&m_copyCommandList)));
 
         setName(m_copyCommandList.Get(), L"Copy command list");
+
+        // Create compute command objects.
+        const D3D12_COMMAND_QUEUE_DESC computeCommandQueueDesc = {
+            .Type = D3D12_COMMAND_LIST_TYPE_COMPUTE,
+            .Priority = D3D12_COMMAND_QUEUE_PRIORITY_NORMAL,
+            .Flags = D3D12_COMMAND_QUEUE_FLAG_NONE,
+            .NodeMask = 0u,
+        };
+
+        throwIfFailed(m_device->CreateCommandQueue(&computeCommandQueueDesc, IID_PPV_ARGS(&m_computeCommandQueue)));
+        setName(m_computeCommandQueue.Get(), L"Compute command queue");
+
+        throwIfFailed(m_device->CreateCommandAllocator(D3D12_COMMAND_LIST_TYPE_COMPUTE, IID_PPV_ARGS(&m_computeCommandAllocator)));
+        setName(m_computeCommandAllocator.Get(), L"Compute command allocator");
+
+        // Create the command list. Used for recording GPU commands.
+        throwIfFailed(m_device->CreateCommandList(0u, D3D12_COMMAND_LIST_TYPE_COMPUTE, m_computeCommandAllocator.Get(), nullptr, IID_PPV_ARGS(&m_computeCommandList)));
+
+        setName(m_computeCommandList.Get(), L"Compute command list");
     }
 
     void Engine::initSyncPrimitives()
@@ -474,6 +507,8 @@ namespace nether
         m_fenceEvent = ::CreateEvent(nullptr, false, false, nullptr);
 
         throwIfFailed(m_device->CreateFence(0u, D3D12_FENCE_FLAG_NONE, IID_PPV_ARGS(&m_copyFence)));
+
+        throwIfFailed(m_device->CreateFence(0u, D3D12_FENCE_FLAG_NONE, IID_PPV_ARGS(&m_computeFence)));
     }
 
     void Engine::initSwapchain()
@@ -669,9 +704,32 @@ namespace nether
         createPipeline(L"shaders/LightShader.hlsl", L"shaders/LightShader.hlsl", L"LightPipeline");
     }
 
+    void Engine::initMipMapGenerator()
+    {
+        // Setup the mip map generation compute pipeline.
+
+        // Setup shaders.
+        const Shader computeShader = ShaderCompiler::compile(ShaderTypes::Compute, L"shaders/GenerateMipMaps.hlsl");
+
+        const D3D12_SHADER_BYTECODE computeShaderByteCode = {
+            .pShaderBytecode = computeShader.shaderBlob->GetBufferPointer(),
+            .BytecodeLength = computeShader.shaderBlob->GetBufferSize(),
+        };
+
+        const D3D12_COMPUTE_PIPELINE_STATE_DESC computePipelineStateDesc = {
+            .pRootSignature = m_bindlessRootSignature.Get(),
+            .CS = computeShaderByteCode,
+        };
+
+        throwIfFailed(m_device->CreateComputePipelineState(&computePipelineStateDesc, IID_PPV_ARGS(&m_mipMapGenerationPipeline.pipelineState)));
+        setName(m_mipMapGenerationPipeline.pipelineState.Get(), std::wstring(L" Mip Map Generation Compute Pipeline State"));
+
+        m_mipGenBuffer = createConstantBuffer<GenerateMipMapData>(L"Mip Map Generate Constant Buffer");
+    }
+
     void Engine::initMeshes() { m_meshes[L"CubeMesh"] = createMesh("assets/Cube/glTF/Cube.gltf"); }
 
-    void Engine::initTextures() { m_textures[L"AlbedoTexture"] = createTexture("assets/Cube/glTF/Cube_BaseColor.png", DXGI_FORMAT_R8G8B8A8_UNORM_SRGB, L"Albedo Texture"); }
+    void Engine::initTextures() { m_textures[L"AlbedoTexture"] = createTexture("assets/Cube/glTF/Cube_BaseColor.png", DXGI_FORMAT_R8G8B8A8_UNORM_SRGB, true, L"Albedo Texture"); }
 
     void Engine::initScene()
     {
@@ -708,6 +766,24 @@ namespace nether
 
         throwIfFailed(m_copyCommandAllocator->Reset());
         throwIfFailed(m_copyCommandList->Reset(m_copyCommandAllocator.Get(), nullptr));
+    };
+
+    void Engine::executeComputeCommands()
+    {
+        throwIfFailed(m_computeCommandList->Close());
+        const std::array<ID3D12CommandList*, 1u> computeCommandLists{m_computeCommandList.Get()};
+        m_computeCommandQueue->ExecuteCommandLists(1u, computeCommandLists.data());
+
+        m_computeFenceValue++;
+
+        m_computeCommandQueue->Signal(m_computeFence.Get(), m_computeFenceValue);
+        if (m_computeFence->GetCompletedValue() < m_computeFenceValue)
+        {
+            throwIfFailed(m_computeFence->SetEventOnCompletion(m_computeFenceValue, nullptr));
+        }
+
+        throwIfFailed(m_computeCommandAllocator->Reset());
+        throwIfFailed(m_computeCommandList->Reset(m_computeCommandAllocator.Get(), nullptr));
     };
 
     Comptr<ID3D12Resource> Engine::createBuffer(const D3D12_RESOURCE_DESC& bufferResourceDesc, const std::byte* data, const std::wstring_view bufferName)
@@ -768,7 +844,7 @@ namespace nether
         return buffer;
     }
 
-    Texture Engine::createTexture(const std::string_view texturePath, const DXGI_FORMAT& format, const std::wstring_view textureName)
+    Texture Engine::createTexture(const std::string_view texturePath, const DXGI_FORMAT& format, const bool generateMipMaps, const std::wstring_view textureName)
     {
         Texture texture{};
 
@@ -778,6 +854,22 @@ namespace nether
 
         stbi_uc* data = stbi_load(texturePath.data(), &width, &height, nullptr, componentCount);
 
+        uint16_t mipLevels = 1u;
+        if (generateMipMaps)
+        {
+            mipLevels = static_cast<uint16_t>(std::floor(std::log2(std::max<int32_t>(width, height))));
+
+            if (mipLevels >= width)
+            {
+                mipLevels = static_cast<UINT16>(width - 1);
+            }
+
+            if (mipLevels >= height)
+            {
+                mipLevels = static_cast<UINT16>(height - 1);
+            }
+        }
+
         // Create the resource desc for this texture.
         const D3D12_RESOURCE_DESC textureResourceDesc = {
             .Dimension = D3D12_RESOURCE_DIMENSION_TEXTURE2D,
@@ -785,11 +877,11 @@ namespace nether
             .Width = static_cast<uint64_t>(width),
             .Height = static_cast<uint32_t>(height),
             .DepthOrArraySize = 1u,
-            .MipLevels = 1u,
+            .MipLevels = mipLevels,
             .Format = format,
             .SampleDesc = {1u, 0u},
             .Layout = D3D12_TEXTURE_LAYOUT_UNKNOWN,
-            .Flags = D3D12_RESOURCE_FLAG_NONE,
+            .Flags = D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS,
         };
 
         const CD3DX12_HEAP_PROPERTIES defaultHeapProperties(D3D12_HEAP_TYPE_DEFAULT);
@@ -849,6 +941,12 @@ namespace nether
         m_cbvSrvUavDescriptorHeap.offset();
 
         setName(texture.texture.Get(), textureName);
+
+        if (generateMipMaps)
+        {
+            generateMips(texture);
+        }
+
         return texture;
     }
 
@@ -1110,5 +1208,117 @@ namespace nether
 
         throwIfFailed(m_device->CreateGraphicsPipelineState(&graphicsPipelineStateDesc, IID_PPV_ARGS(&m_graphicsPipelines[pipelineName.data()].pipelineState)));
         setName(m_graphicsPipelines[L"BasePipeline"].pipelineState.Get(), pipelineName.data() + std::wstring(L"Pipeline State"));
+    }
+
+    void Engine::generateMips(Texture& texture)
+    {
+        D3D12_RESOURCE_DESC sourceResourceDesc = texture.texture->GetDesc();
+        if (sourceResourceDesc.MipLevels <= 1)
+        {
+            return;
+        }
+
+        // Start the mip generation process.
+        for (uint32_t srcMipLevel = 0; srcMipLevel < sourceResourceDesc.MipLevels - 1u;)
+        {
+            uint64_t sourceWidth = sourceResourceDesc.Width >> srcMipLevel;
+            uint64_t sourceHeight = sourceResourceDesc.Height >> srcMipLevel;
+
+            // Destination width and height is half of that of source width and height.
+            uint32_t destinationWidth = std::max<uint32_t>((uint32_t)sourceWidth >> 1u, 1u);
+            uint32_t destinationHeight = std::max<uint32_t>((uint32_t)sourceHeight >> 1u, 1u);
+
+            // Find the dimension type.
+            DimensionType dimensionType{};
+            if (sourceHeight % 2 == 0 && sourceWidth % 2 == 0)
+            {
+                dimensionType = DimensionType::WidthHeightEven;
+            }
+            else if (sourceHeight % 2 != 0 && sourceWidth % 2 == 0)
+            {
+                dimensionType = DimensionType::WidthEvenHeightOdd;
+            }
+            else if (sourceHeight % 2 == 0 && sourceWidth % 2 != 0)
+            {
+                dimensionType = DimensionType::WidthOddHeightEven;
+            }
+            else
+            {
+                dimensionType = DimensionType::WidthHeightOdd;
+            }
+
+            // At a single compute shader dispatch, we can generate atmost 4 mip maps.
+            // The code below checks for in this loop iteration, how many levels can we compute, so as to have subsequent mip level dimension
+            // be exactly half : exactly 50 % decrease in mip dimension.
+            // i.e number of times mip can be halved until we reach a mip level where one dimension is odd.
+            // If dimension is odd, texture needs to be sampled multiple times, which will be handled in a new dispatch.
+            DWORD mipCount{};
+            // Value of temp not required.
+            _BitScanForward64(&mipCount, (destinationWidth == 1u ? destinationHeight : destinationWidth) | (destinationHeight == 1u ? destinationWidth : destinationHeight));
+            mipCount = std::min<uint32_t>(4, mipCount + 1);
+            mipCount = (srcMipLevel + mipCount) >= sourceResourceDesc.MipLevels ? sourceResourceDesc.MipLevels - srcMipLevel - 1u : mipCount;
+
+            // NOTE : UAV's have a limited set of formats they can use.
+            // Refer : https://docs.microsoft.com/en-us/windows/win32/direct3d12/typed-unordered-access-view-loads.
+            std::array<uint32_t, 4u> mipUavs{};
+            for (uint32_t uav : std::views::iota(0u, static_cast<uint32_t>(mipCount)))
+            {
+                const D3D12_UNORDERED_ACCESS_VIEW_DESC uavDesc = {
+                    .Format = getNonSRGBFormat(sourceResourceDesc.Format),
+                    .ViewDimension = D3D12_UAV_DIMENSION_TEXTURE2D,
+                    .Texture2D{
+                        .MipSlice = uav + 1 + srcMipLevel,
+                        .PlaneSlice = 0u,
+                    },
+                };
+
+                //  Reading from a SRV/UAV mapped to a null resource will return black and writing to a UAV mapped to a null resource will have no effect (from 3DGEP).
+                m_device->CreateUnorderedAccessView(texture.texture.Get(), nullptr, &uavDesc, m_cbvSrvUavDescriptorHeap.currentCpuDescriptorHandle);
+
+                mipUavs[uav] = m_cbvSrvUavDescriptorHeap.currentDescriptorIndex;
+                m_cbvSrvUavDescriptorHeap.offset();
+            }
+            m_mipGenBuffer.data.dimensionType = dimensionType;
+            m_mipGenBuffer.data.isSrgb = isTextureSRGB(sourceResourceDesc.Format);
+            m_mipGenBuffer.data.texelSize = {1.0f / destinationWidth, 1.0f / destinationHeight};
+            m_mipGenBuffer.data.sourceMipLevel = srcMipLevel;
+            m_mipGenBuffer.data.numberOfMipLevels = mipCount;
+
+            m_mipGenBuffer.update();
+
+            struct RenderResources
+            {
+                uint32_t mipGenBufferIndex;
+                uint32_t sourceTextureIndex;
+                uint32_t outputMip1Index;
+                uint32_t outputMip2Index;
+                uint32_t outputMip3Index;
+                uint32_t outputMip4Index;
+            };
+
+            const RenderResources renderResources = {
+                .mipGenBufferIndex = m_mipGenBuffer.cbvIndex,
+                .sourceTextureIndex = texture.srvIndex,
+                .outputMip1Index = mipUavs[0],
+                .outputMip2Index = mipUavs[1],
+                .outputMip3Index = mipUavs[2],
+                .outputMip4Index = mipUavs[3],
+            };
+
+            const std::array<ID3D12DescriptorHeap*, 1u> shaderVisibleDescriptorHeaps{m_cbvSrvUavDescriptorHeap.descriptorHeap.Get()};
+            m_computeCommandList->SetDescriptorHeaps(1u, shaderVisibleDescriptorHeaps.data());
+            m_computeCommandList->SetComputeRootSignature(m_bindlessRootSignature.Get());
+            m_computeCommandList->SetPipelineState(m_mipMapGenerationPipeline.pipelineState.Get());
+
+            m_computeCommandList->SetComputeRoot32BitConstants(0u, 64, &renderResources, 0u);
+
+            m_computeCommandList->Dispatch(std::max<uint32_t>((uint32_t)std::ceil(destinationWidth / 8.0f), 1u),
+                                           std::max<uint32_t>((uint32_t)std::ceil(destinationHeight / 8.0f), 1u),
+                                           1);
+
+            executeComputeCommands();
+
+            srcMipLevel += static_cast<uint32_t>(mipCount);
+        };
     }
 }

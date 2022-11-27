@@ -44,10 +44,10 @@ inline std::string hresultToString(const HRESULT hr)
 inline void fatalError(const std::wstring_view message, const std::source_location source_location = std::source_location::current())
 {
     const auto errorMessage = std::string(wStringToString(message) + std::format(" Source Location data : File Name -> {}, Function Name -> {}, Line Number -> {}, Column -> {}",
-                                                            source_location.file_name(),
-                                                            source_location.function_name(),
-                                                            source_location.line(),
-                                                            source_location.column()));
+                                                                                 source_location.file_name(),
+                                                                                 source_location.function_name(),
+                                                                                 source_location.line(),
+                                                                                 source_location.column()));
 
     ::MessageBoxW(nullptr, message.data(), L"ERROR!", MB_OK | MB_ICONEXCLAMATION);
     throw std::runtime_error(errorMessage);
@@ -114,3 +114,81 @@ inline void debugLog(const std::wstring_view message)
 }
 
 template <typename T> static inline constexpr typename std::underlying_type<T>::type EnumClassValue(const T& value) { return static_cast<std::underlying_type<T>::type>(value); }
+
+inline DXGI_FORMAT getNonSRGBFormat(const DXGI_FORMAT format)
+{
+    switch (format)
+    {
+        case DXGI_FORMAT_R8G8B8A8_UNORM_SRGB:
+            {
+                return DXGI_FORMAT_R8G8B8A8_UNORM;
+            }
+            break;
+
+        case DXGI_FORMAT_BC1_UNORM_SRGB:
+            {
+                return DXGI_FORMAT_BC1_UNORM;
+            }
+            break;
+
+        case DXGI_FORMAT_BC2_UNORM_SRGB:
+            {
+                return DXGI_FORMAT_BC2_UNORM;
+            }
+            break;
+
+        case DXGI_FORMAT_BC3_UNORM_SRGB:
+            {
+                return DXGI_FORMAT_BC3_UNORM;
+            }
+            break;
+
+        case DXGI_FORMAT_B8G8R8A8_UNORM_SRGB:
+            {
+                return DXGI_FORMAT_B8G8R8A8_UNORM;
+            }
+            break;
+
+        case DXGI_FORMAT_B8G8R8X8_UNORM_SRGB:
+            {
+                return DXGI_FORMAT_B8G8R8X8_UNORM;
+            }
+            break;
+
+        case DXGI_FORMAT_BC7_UNORM_SRGB:
+            {
+                return DXGI_FORMAT_BC7_UNORM;
+            }
+            break;
+
+        default:
+            {
+                return format;
+            }
+            break;
+    }
+}
+
+inline bool isTextureSRGB(const DXGI_FORMAT& format)
+{
+    switch (format)
+    {
+        case DXGI_FORMAT_R8G8B8A8_UNORM_SRGB:
+        case DXGI_FORMAT_BC1_UNORM_SRGB:
+        case DXGI_FORMAT_BC2_UNORM_SRGB:
+        case DXGI_FORMAT_BC3_UNORM_SRGB:
+        case DXGI_FORMAT_B8G8R8A8_UNORM_SRGB:
+        case DXGI_FORMAT_B8G8R8X8_UNORM_SRGB:
+        case DXGI_FORMAT_BC7_UNORM_SRGB:
+            {
+                return true;
+            }
+            break;
+
+        default:
+            {
+                return false;
+            }
+            break;
+    }
+};
